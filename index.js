@@ -2,9 +2,9 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
   id: "org.khalid.netflix.sa.test",
-  version: "1.0.0",
-  name: "🧪 Netflix السعودية - تجريبي",
-  description: "اختبار قراءة كتالوج Netflix السعودية العام",
+  version: "1.0.1",
+  name: "🧪 Netflix السعودية - اختبار",
+  description: "اختبار قراءة أسماء العناوين من صفحة Netflix السعودية",
   resources: ["catalog"],
   types: ["movie"],
   catalogs: [
@@ -18,15 +18,12 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// صفحة أفلام Netflix السعودية العامة
 const NETFLIX_URL =
   "https://www.netflix.com/sa/browse/genre/34399";
 
 async function getNetflixPage() {
   const response = await fetch(NETFLIX_URL, {
     headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Safari/537.36",
       "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8"
     }
   });
@@ -35,60 +32,7 @@ async function getNetflixPage() {
     throw new Error(`Netflix HTTP ${response.status}`);
   }
 
-  return response.text();
-}
-
-function extractTitles(html) {
-  const metas = [];
-  const seen = new Set();
-
-  /*
-    Netflix يضع في الصفحات العامة روابط للعناوين بالشكل:
-    /title/12345678
-    ونحاول استخراج ID + الاسم + الصورة من HTML.
-  */
-
-  const regex =
-    /<a[^>]+href="(?:https?:\/\/www\.netflix\.com)?\/(?:sa(?:-ar)?\/)?title\/(\d+)[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-
-  let match;
-
-  while ((match = regex.exec(html)) !== null) {
-    const netflixId = match[1];
-
-    if (seen.has(netflixId)) continue;
-
-    const block = match[2];
-
-    const imgMatch =
-      block.match(/<img[^>]+src="([^"]+)"/i);
-
-    const altMatch =
-      block.match(/<img[^>]+alt="([^"]+)"/i);
-
-    const titleMatch =
-      block.match(/title="([^"]+)"/i);
-
-    const name =
-      altMatch?.[1] ||
-      titleMatch?.[1] ||
-      `Netflix ${netflixId}`;
-
-    const poster = imgMatch?.[1];
-
-    if (!poster) continue;
-
-    seen.add(netflixId);
-
-    metas.push({
-      id: `netflix:${netflixId}`,
-      type: "movie",
-      name: decodeHtml(name),
-      poster
-    });
-  }
-
-  return metas;
+  return await response.text();
 }
 
 function decodeHtml(text) {
@@ -97,7 +41,52 @@ function decodeHtml(text) {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+    .replace(/&gt;/g, ">")
+    .replace(/\\u0026/g, "&")
+    .replace(/\\u0027/g, "'")
+    .replace(/\\u0022/g, '"')
+    .trim();
+}
+
+function extractNames(html) {
+  const names = [];
+  const seen = new Set();
+
+  // Netflix قد يضع أسماء العناوين في alt أو aria-label
+  const patterns = [
+    /alt="([^"]+)"/gi,
+    /aria-label="([^"]+)"/gi
+  ];
+
+  for (const regex of patterns) {
+    let match;
+
+    while ((match = regex.exec(html)) !== null) {
+      const name = decodeHtml(match[1]);
+
+      if (!name) continue;
+      if (name.length < 2 || name.length > 150) continue;
+      if (seen.has(name)) continue;
+
+      // نستبعد الكلمات العامة الموجودة في واجهة الموقع
+      const lower = name.toLowerCase();
+
+      if (
+        lower.includes("netflix") ||
+        lower.includes("sign in") ||
+        lower.includes("تسجيل الدخول") ||
+        lower.includes("menu") ||
+        lower.includes("logo")
+      ) {
+        continue;
+      }
+
+      seen.add(name);
+      names.push(name);
+    }
+  }
+
+  return names;
 }
 
 builder.defineCatalogHandler(async (args) => {
@@ -109,30 +98,35 @@ builder.defineCatalogHandler(async (args) => {
   }
 
   try {
-    console.log("Fetching Netflix Saudi Arabia...");
+    console.log("Fetching Netflix Saudi page...");
 
     const html = await getNetflixPage();
 
-    console.log(
-      "Netflix HTML received:",
-      html.length,
-      "characters"
-    );
+    console.log("HTML length:", html.length);
 
-    const metas = extractTitles(html);
+    const names = extractNames(html);
 
-    console.log(
-      "Netflix titles found:",
-      metas.length
-    );
+    console.log("Netflix names found:", names.length);
+    console.log("First names:", names.slice(0, 20));
+
+    /*
+      هذا اختبار فقط.
+      Stremio يحتاج poster لعرض البطاقات بشكل طبيعي،
+      لذلك نستخدم صورة مؤقتة ثابتة حتى نتأكد أولاً
+      أن أسماء Netflix يتم استخراجها فعلاً.
+    */
+
+    const metas = names.slice(0, 100).map((name, index) => ({
+      id: `netflix-test:${index}`,
+      type: "movie",
+      name,
+      poster:
+        "https://dummyimage.com/300x450/111/ffffff.png&text=Netflix"
+    }));
 
     return { metas };
   } catch (error) {
-    console.error(
-      "Netflix catalog error:",
-      error
-    );
-
+    console.error("Netflix test error:", error);
     return { metas: [] };
   }
 });
