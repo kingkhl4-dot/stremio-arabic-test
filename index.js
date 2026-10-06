@@ -2,9 +2,9 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
   id: "org.khalid.netflix.sa.test",
-  version: "1.0.1",
-  name: "🧪 Netflix السعودية - اختبار",
-  description: "اختبار قراءة أسماء العناوين من صفحة Netflix السعودية",
+  version: "1.0.2",
+  name: "🧪 Netflix السعودية - تجريبي",
+  description: "اختبار كتالوج Netflix السعودية العام",
   resources: ["catalog"],
   types: ["movie"],
   catalogs: [
@@ -32,7 +32,7 @@ async function getNetflixPage() {
     throw new Error(`Netflix HTTP ${response.status}`);
   }
 
-  return await response.text();
+  return response.text();
 }
 
 function decodeHtml(text) {
@@ -48,45 +48,80 @@ function decodeHtml(text) {
     .trim();
 }
 
-function extractNames(html) {
-  const names = [];
+function cleanName(text) {
+  return decodeHtml(text)
+    .replace(/^Go to\s*/i, "")
+    .replace(/^اذهب إلى\s*/i, "")
+    .trim();
+}
+
+function extractNetflix(html) {
+  const metas = [];
   const seen = new Set();
 
-  // Netflix قد يضع أسماء العناوين في alt أو aria-label
-  const patterns = [
-    /alt="([^"]+)"/gi,
-    /aria-label="([^"]+)"/gi
-  ];
+  /*
+    نبحث عن روابط Netflix العامة التي تحتوي على title ID،
+    ثم نقرأ النص والصورة الموجودة بالقرب منها.
+  */
+  const linkRegex =
+    /<a[^>]+href="([^"]*\/title\/(\d+)[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
 
-  for (const regex of patterns) {
-    let match;
+  let match;
 
-    while ((match = regex.exec(html)) !== null) {
-      const name = decodeHtml(match[1]);
+  while ((match = linkRegex.exec(html)) !== null) {
+    const netflixId = match[2];
 
-      if (!name) continue;
-      if (name.length < 2 || name.length > 150) continue;
-      if (seen.has(name)) continue;
+    if (seen.has(netflixId)) continue;
 
-      // نستبعد الكلمات العامة الموجودة في واجهة الموقع
-      const lower = name.toLowerCase();
+    const block = match[3];
 
-      if (
-        lower.includes("netflix") ||
-        lower.includes("sign in") ||
-        lower.includes("تسجيل الدخول") ||
-        lower.includes("menu") ||
-        lower.includes("logo")
-      ) {
-        continue;
-      }
+    const alt =
+      block.match(/alt="([^"]+)"/i)?.[1] || "";
 
-      seen.add(name);
-      names.push(name);
+    const aria =
+      block.match(/aria-label="([^"]+)"/i)?.[1] || "";
+
+    const img =
+      block.match(/<img[^>]+src="([^"]+)"/i)?.[1] || "";
+
+    let name = cleanName(alt || aria);
+
+    /*
+      بعض أسماء Netflix تكون في خصائص العنصر نفسه،
+      لذلك نأخذ جزءاً من HTML حول الرابط كخيار إضافي.
+    */
+    if (!name) {
+      const start = Math.max(0, match.index - 500);
+      const end = Math.min(
+        html.length,
+        linkRegex.lastIndex + 500
+      );
+
+      const around = html.slice(start, end);
+
+      const nearby =
+        around.match(/aria-label="([^"]+)"/i)?.[1] ||
+        around.match(/alt="([^"]+)"/i)?.[1] ||
+        "";
+
+      name = cleanName(nearby);
     }
+
+    if (!name) continue;
+
+    seen.add(netflixId);
+
+    metas.push({
+      id: `netflix:${netflixId}`,
+      type: "movie",
+      name,
+      poster:
+        img ||
+        "https://dummyimage.com/300x450/111/ffffff.png&text=Netflix"
+    });
   }
 
-  return names;
+  return metas;
 }
 
 builder.defineCatalogHandler(async (args) => {
@@ -98,35 +133,22 @@ builder.defineCatalogHandler(async (args) => {
   }
 
   try {
-    console.log("Fetching Netflix Saudi page...");
+    console.log("Fetching Netflix Saudi...");
 
     const html = await getNetflixPage();
 
     console.log("HTML length:", html.length);
 
-    const names = extractNames(html);
+    const metas = extractNetflix(html);
 
-    console.log("Netflix names found:", names.length);
-    console.log("First names:", names.slice(0, 20));
+    console.log("Netflix items with ID:", metas.length);
+    console.log("First items:", metas.slice(0, 10));
 
-    /*
-      هذا اختبار فقط.
-      Stremio يحتاج poster لعرض البطاقات بشكل طبيعي،
-      لذلك نستخدم صورة مؤقتة ثابتة حتى نتأكد أولاً
-      أن أسماء Netflix يتم استخراجها فعلاً.
-    */
-
-    const metas = names.slice(0, 100).map((name, index) => ({
-      id: `netflix-test:${index}`,
-      type: "movie",
-      name,
-      poster:
-        "https://dummyimage.com/300x450/111/ffffff.png&text=Netflix"
-    }));
-
-    return { metas };
+    return {
+      metas: metas.slice(0, 100)
+    };
   } catch (error) {
-    console.error("Netflix test error:", error);
+    console.error("Netflix error:", error);
     return { metas: [] };
   }
 });
