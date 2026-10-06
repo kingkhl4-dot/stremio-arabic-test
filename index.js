@@ -1,83 +1,74 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.arabic.test",
+  id: "org.khalid.akwam.test",
   version: "1.0.0",
-  name: "🧪 المكتبة العربية - تجريبي",
-  description: "إضافة تجريبية لاختبار المكتبة العربية",
+  name: "🧪 أكوام - تجريبي",
+  description: "تجربة كتالوج أكوام",
   resources: ["catalog", "meta"],
   types: ["movie", "series"],
   catalogs: [
     {
       type: "movie",
-      id: "arabic_test_movies",
-      name: "🧪 أفلام عربية - تجريبي"
+      id: "akwam_movies",
+      name: "🧪 أفلام أكوام",
+      extra: [{ name: "skip", isRequired: false }]
     },
     {
       type: "series",
-      id: "arabic_test_series",
-      name: "🧪 مسلسلات عربية - تجريبي"
+      id: "akwam_series",
+      name: "🧪 مسلسلات أكوام",
+      extra: [{ name: "skip", isRequired: false }]
     }
   ]
 };
 
 const builder = new addonBuilder(manifest);
 
-async function tmdb(path, params = {}) {
-  const url = new URL(`https://api.themoviedb.org/3${path}`);
+const ARABCITY = "https://arabcity.fly.dev/YWxs";
 
-  url.searchParams.set("api_key", process.env.TMDB_API_KEY);
-  url.searchParams.set("language", "ar-SA");
-
-  for (const [key, value] of Object.entries(params)) {
-    url.searchParams.set(key, value);
-  }
-
-  const response = await fetch(url);
+async function getJSON(url) {
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0"
+    }
+  });
 
   if (!response.ok) {
-    throw new Error(`TMDB error: ${response.status}`);
+    throw new Error(`Source error: ${response.status}`);
   }
 
   return response.json();
 }
 
-function poster(path) {
-  return path
-    ? `https://image.tmdb.org/t/p/w500${path}`
-    : undefined;
-}
-
-function background(path) {
-  return path
-    ? `https://image.tmdb.org/t/p/original${path}`
-    : undefined;
-}
-
 builder.defineCatalogHandler(async (args) => {
   try {
-    const isMovie = args.type === "movie";
-    const page = Math.floor(Number(args.extra?.skip || 0) / 20) + 1;
+    const skip = Number(args.extra?.skip || 0);
 
-    const data = await tmdb(
-      isMovie ? "/discover/movie" : "/discover/tv",
-      {
-        with_original_language: "ar",
-        sort_by: "popularity.desc",
-        include_adult: "false",
-        page: String(page)
-      }
-    );
+    const catalogId =
+      args.type === "movie"
+        ? "akoam-movies-all"
+        : "akoam-series-all";
 
-    const metas = (data.results || []).map((item) => ({
-      id: `tmdb:${item.id}`,
+    let url =
+      `${ARABCITY}/catalog/ArabCity-Akwam/${catalogId}.json`;
+
+    if (skip > 0) {
+      url =
+        `${ARABCITY}/catalog/ArabCity-Akwam/${catalogId}/skip=${skip}.json`;
+    }
+
+    const data = await getJSON(url);
+
+    const metas = (data.metas || []).map((item) => ({
+      id: item.id,
       type: args.type,
-      name: item.title || item.name || item.original_title || item.original_name,
-      poster: poster(item.poster_path),
-      background: background(item.backdrop_path),
-      description: item.overview || "",
-      releaseInfo:
-        (item.release_date || item.first_air_date || "").slice(0, 4)
+      name: item.name,
+      poster: item.poster,
+      background: item.background,
+      description: item.description,
+      releaseInfo: item.releaseInfo,
+      genres: item.genres
     }));
 
     return { metas };
@@ -89,56 +80,33 @@ builder.defineCatalogHandler(async (args) => {
 
 builder.defineMetaHandler(async (args) => {
   try {
-    const tmdbId = String(args.id).replace("tmdb:", "");
-    const isMovie = args.type === "movie";
+    const sourceType = "ArabCity-Akwam";
 
-    const data = await tmdb(
-      isMovie ? `/movie/${tmdbId}` : `/tv/${tmdbId}`,
-      {
-        append_to_response: "credits"
+    const url =
+      `${ARABCITY}/meta/${sourceType}/${encodeURIComponent(args.id)}.json`;
+
+    const data = await getJSON(url);
+
+    if (!data.meta) {
+      return { meta: null };
+    }
+
+    const item = data.meta;
+
+    return {
+      meta: {
+        id: args.id,
+        type: args.type,
+        name: item.name,
+        poster: item.poster,
+        background: item.background,
+        description: item.description,
+        releaseInfo: item.releaseInfo,
+        genres: item.genres,
+        runtime: item.runtime,
+        imdbRating: item.imdbRating
       }
-    );
-
-    const cast = (data.credits?.cast || [])
-      .slice(0, 8)
-      .map((person) => person.name);
-
-    const directors = isMovie
-      ? (data.credits?.crew || [])
-          .filter((person) => person.job === "Director")
-          .map((person) => person.name)
-      : (data.created_by || []).map((person) => person.name);
-
-    const meta = {
-      id: args.id,
-      type: args.type,
-      name:
-        data.title ||
-        data.name ||
-        data.original_title ||
-        data.original_name,
-      poster: poster(data.poster_path),
-      background: background(data.backdrop_path),
-      description: data.overview || "",
-      releaseInfo:
-        (data.release_date || data.first_air_date || "").slice(0, 4),
-      genres: (data.genres || []).map((genre) => genre.name),
-      cast,
-      director: directors,
-      imdbRating:
-        data.vote_average
-          ? Number(data.vote_average).toFixed(1)
-          : undefined,
-      runtime: isMovie
-        ? data.runtime
-          ? `${data.runtime} دقيقة`
-          : undefined
-        : data.episode_run_time?.[0]
-          ? `${data.episode_run_time[0]} دقيقة`
-          : undefined
     };
-
-    return { meta };
   } catch (error) {
     console.error("Meta error:", error);
     return { meta: null };
