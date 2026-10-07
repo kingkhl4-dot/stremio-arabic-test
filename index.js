@@ -1,17 +1,17 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.netflix.series.debug",
-  version: "1.0.0",
-  name: "🧪 Netflix Series Debug",
-  description: "تشخيص صفحة مسلسلات Netflix",
+  id: "org.khalid.netflix.series.debug2",
+  version: "2.0.0",
+  name: "🧪 Netflix Series Debug 2",
+  description: "تشخيص بيانات مسلسلات Netflix",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "netflix_series_debug",
-      name: "Netflix Series Debug"
+      id: "netflix_series_debug2",
+      name: "Netflix Series Debug 2"
     }
   ]
 };
@@ -33,19 +33,21 @@ async function getPage(url) {
     redirect: "follow"
   });
 
-  const html = await response.text();
-
   return {
-    html,
     status: response.status,
-    finalUrl: response.url
+    url: response.url,
+    html: await response.text()
   };
+}
+
+function countMatches(html, regex) {
+  return (html.match(regex) || []).length;
 }
 
 builder.defineCatalogHandler(async (args) => {
   if (
     args.type !== "series" ||
-    args.id !== "netflix_series_debug"
+    args.id !== "netflix_series_debug2"
   ) {
     return { metas: [] };
   }
@@ -54,67 +56,101 @@ builder.defineCatalogHandler(async (args) => {
     const result = await getPage(SERIES_URL);
     const html = result.html;
 
-    // كم مرة ظهر /title/ في الصفحة؟
-    const titleMatches =
-      html.match(/\/title\/\d+/gi) || [];
-
-    // نأخذ IDs فريدة فقط
-    const ids = [
-      ...new Set(
-        titleMatches.map(x =>
-          x.match(/\d+/)?.[0]
-        )
-      )
-    ].filter(Boolean);
-
-    // نبحث عن أي أرقام Netflix تظهر حول كلمة title
-    const looseMatches =
-      html.match(/title.{0,100}?\d{6,10}/gi) || [];
-
-    console.log("===== NETFLIX SERIES DEBUG =====");
-    console.log("HTTP status:", result.status);
-    console.log("Final URL:", result.finalUrl);
-    console.log("HTML length:", html.length);
-    console.log("/title/ count:", titleMatches.length);
-    console.log("Unique IDs:", ids.length);
-    console.log("First IDs:", ids.slice(0, 10));
-    console.log(
-      "Loose title matches:",
-      looseMatches.slice(0, 5)
-    );
-    console.log("===============================");
-
-    // نخلي نتيجة Stremio نفسها تعرض لنا التشخيص
-    const metas = [
+    const tests = [
       {
-        id: "debug:status",
-        type: "series",
-        name: `HTTP ${result.status} | HTML ${html.length}`
+        name: "videoId",
+        regex: /"videoId"\s*:\s*"?\d+"?/gi
       },
       {
-        id: "debug:titles",
-        type: "series",
-        name: `/title/ = ${titleMatches.length} | IDs = ${ids.length}`
+        name: "video_id",
+        regex: /"video_id"\s*:\s*"?\d+"?/gi
+      },
+      {
+        name: "titleId",
+        regex: /"titleId"\s*:\s*"?\d+"?/gi
+      },
+      {
+        name: "title_id",
+        regex: /"title_id"\s*:\s*"?\d+"?/gi
+      },
+      {
+        name: "movieId",
+        regex: /"movieId"\s*:\s*"?\d+"?/gi
+      },
+      {
+        name: "id",
+        regex: /"id"\s*:\s*"?\d{6,10}"?/gi
+      },
+      {
+        name: "nflximg",
+        regex: /nflximg\.net/gi
+      },
+      {
+        name: "nflxso",
+        regex: /nflxso\.net/gi
+      },
+      {
+        name: "application-json",
+        regex: /application\/(?:ld\+)?json/gi
       }
     ];
 
-    ids.slice(0, 5).forEach((id, index) => {
-      metas.push({
-        id: `debug:${id}`,
+    const metas = [
+      {
+        id: "debug2:page",
         type: "series",
-        name: `Netflix ID ${index + 1}: ${id}`
+        name:
+          `HTTP ${result.status} | HTML ${html.length}`
+      }
+    ];
+
+    for (const test of tests) {
+      const count = countMatches(
+        html,
+        test.regex
+      );
+
+      metas.push({
+        id: `debug2:${test.name}`,
+        type: "series",
+        name: `${test.name} = ${count}`
       });
-    });
+    }
+
+    // نأخذ أمثلة فقط بدون إغراق الصفحة
+    const interesting =
+      html.match(
+        /.{0,80}(?:videoId|titleId|movieId).{0,120}/gi
+      ) || [];
+
+    console.log("===== DEBUG 2 =====");
+    console.log("HTTP:", result.status);
+    console.log("URL:", result.url);
+    console.log("HTML:", html.length);
+
+    for (const test of tests) {
+      console.log(
+        test.name,
+        countMatches(html, test.regex)
+      );
+    }
+
+    console.log(
+      "Samples:",
+      interesting.slice(0, 10)
+    );
+
+    console.log("===================");
 
     return { metas };
 
   } catch (error) {
-    console.error("DEBUG ERROR:", error);
+    console.error("DEBUG 2 ERROR:", error);
 
     return {
       metas: [
         {
-          id: "debug:error",
+          id: "debug2:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
