@@ -28,7 +28,7 @@ const MOVIES_URL =
   "https://www.netflix.com/sa/browse/genre/34399";
 
 const SERIES_URL =
-  "https://www.netflix.com/sa/browse/genre/83";
+  "https://www.netflix.com/sa-ar/browse/genre/83";
 
 const HEADERS = {
   "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8"
