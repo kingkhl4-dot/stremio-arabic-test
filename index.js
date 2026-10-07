@@ -1,17 +1,17 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.shahid.series.latest",
-  version: "5.0.0",
-  name: "🧪 Shahid Series Latest",
-  description: "اختبار استخراج أحدث مسلسلات شاهد",
+  id: "org.khalid.shahid.series.landing",
+  version: "6.0.0",
+  name: "🧪 Shahid Series Landing",
+  description: "اختبار صفحة مسلسلات شاهد البديلة",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "shahid_series_latest",
-      name: "شاهد - أحدث المسلسلات"
+      id: "shahid_series_landing",
+      name: "شاهد - Landing Series"
     }
   ]
 };
@@ -19,7 +19,7 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 const SHAHID_URL =
-  "https://shahid.mbc.net/ar/series?sort=latest";
+  "https://shahid.mbc.net/ar/landingpages/series";
 
 const HEADERS = {
   "User-Agent":
@@ -57,7 +57,7 @@ builder.defineCatalogHandler(async (args) => {
 
   if (
     args.type !== "series" ||
-    args.id !== "shahid_series_latest"
+    args.id !== "shahid_series_landing"
   ) {
     return { metas: [] };
   }
@@ -79,10 +79,9 @@ builder.defineCatalogHandler(async (args) => {
     const results = [];
     const seen = new Set();
 
-    /*
-      نبحث عن:
-      /ar/series/اسم-المسلسل/series-123456
-    */
+    // مثال:
+    // /ar/series/اسم-المسلسل/series-141486
+
     const regex =
       /\/(?:ar\/)?series\/([^"'<>?\s]+?)\/series-(\d+)/gi;
 
@@ -119,50 +118,47 @@ builder.defineCatalogHandler(async (args) => {
       };
     }
 
-    /*
-      احتياط:
-      إذا ما وجدنا المسارات الكاملة،
-      نحسب جميع series-ID الموجودة.
-    */
+    // فحص احتياطي لأي series-ID داخل الصفحة
+
     const rawIds = [
       ...html.matchAll(/series-(\d+)/gi)
-    ].map(match => match[1]);
+    ].map(x => x[1]);
 
     const uniqueIds = [...new Set(rawIds)];
 
     return {
       metas: [
         {
-          id: "shahid:latest:status",
+          id: "shahid:landing:status",
           type: "series",
           name:
             `HTTP ${response.status} | HTML ${html.length}`
         },
         {
-          id: "shahid:latest:count",
+          id: "shahid:landing:count",
           type: "series",
           name:
             `عدد series-ID = ${uniqueIds.length}`
         },
         {
-          id: "shahid:latest:first",
+          id: "shahid:landing:first",
           type: "series",
           name:
             uniqueIds.length
               ? `أول ID = ${uniqueIds[0]}`
-              : "لم نجد series-ID"
+              : "لم نجد أي series-ID"
         }
       ]
     };
 
   } catch (error) {
 
-    console.error("SHAHID LATEST ERROR:", error);
+    console.error("SHAHID LANDING ERROR:", error);
 
     return {
       metas: [
         {
-          id: "shahid:latest:error",
+          id: "shahid:landing:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
