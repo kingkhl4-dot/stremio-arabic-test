@@ -2,9 +2,9 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
   id: "org.khalid.netflix.sa.test",
-  version: "1.0.4",
+  version: "1.0.5",
   name: "🧪 Netflix السعودية - تجريبي",
-  description: "اختبار كتالوج Netflix السعودية العام",
+  description: "اختبار كتالوج Netflix السعودية مباشرة",
   resources: ["catalog", "meta"],
   types: ["movie"],
   catalogs: [
@@ -104,10 +104,9 @@ function extractNetflix(html) {
 
     metas.push({
       id: `netflix:${netflixId}`,
+      netflixId,
       type: "movie",
-      name,
-      poster:
-        "https://dummyimage.com/300x450/111/ffffff.png&text=Netflix"
+      name
     });
   }
 
@@ -149,6 +148,33 @@ function extractDescription(html) {
   );
 }
 
+async function enrichItem(item) {
+  try {
+    const html = await getPage(
+      `https://www.netflix.com/sa/title/${item.netflixId}`
+    );
+
+    const poster = extractPoster(html);
+
+    return {
+      id: item.id,
+      type: item.type,
+      name: item.name,
+      poster:
+        poster ||
+        "https://dummyimage.com/300x450/111/ffffff.png&text=Netflix"
+    };
+  } catch (error) {
+    return {
+      id: item.id,
+      type: item.type,
+      name: item.name,
+      poster:
+        "https://dummyimage.com/300x450/111/ffffff.png&text=Netflix"
+    };
+  }
+}
+
 builder.defineCatalogHandler(async (args) => {
   if (
     args.type !== "movie" ||
@@ -158,19 +184,34 @@ builder.defineCatalogHandler(async (args) => {
   }
 
   try {
-    console.log("Fetching Netflix Saudi...");
+    console.log("Fetching Netflix Saudi catalog...");
 
     const html = await getPage(NETFLIX_URL);
+    const items = extractNetflix(html).slice(0, 30);
 
-    console.log("HTML length:", html.length);
+    console.log("Netflix titles:", items.length);
 
-    const metas = extractNetflix(html);
+    const metas = [];
 
-    console.log("Netflix items:", metas.length);
+    // نسحب الصور على دفعات صغيرة حتى لا نضغط على Netflix
+    for (let i = 0; i < items.length; i += 5) {
+      const batch = items.slice(i, i + 5);
+      const results = await Promise.all(
+        batch.map(enrichItem)
+      );
 
-    return {
-      metas: metas.slice(0, 100)
-    };
+      metas.push(...results);
+    }
+
+    const realPosters = metas.filter(
+      item => !item.poster.includes("dummyimage")
+    ).length;
+
+    console.log(
+      `Netflix real posters: ${realPosters}/${metas.length}`
+    );
+
+    return { metas };
   } catch (error) {
     console.error("Netflix catalog error:", error);
     return { metas: [] };
@@ -201,11 +242,6 @@ builder.defineMetaHandler(async (args) => {
 
     const poster = extractPoster(html);
     const description = extractDescription(html);
-
-    console.log(
-      `Netflix ${netflixId} poster:`,
-      poster ? "YES" : "NO"
-    );
 
     const meta = {
       id: `netflix:${netflixId}`,
