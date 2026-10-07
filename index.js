@@ -1,17 +1,17 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.shahid.series.links",
-  version: "2.0.0",
-  name: "🧪 Shahid Series Links",
-  description: "اختبار روابط ومعرفات مسلسلات شاهد",
+  id: "org.khalid.shahid.series.debug3",
+  version: "3.0.0",
+  name: "🧪 Shahid Series Debug 3",
+  description: "فحص روابط أعمال شاهد",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "shahid_series_links",
-      name: "شاهد - مسلسلات"
+      id: "shahid_series_debug3",
+      name: "شاهد - فحص روابط المسلسلات"
     }
   ]
 };
@@ -41,7 +41,7 @@ builder.defineCatalogHandler(async (args) => {
 
   if (
     args.type !== "series" ||
-    args.id !== "shahid_series_links"
+    args.id !== "shahid_series_debug3"
   ) {
     return { metas: [] };
   }
@@ -59,7 +59,7 @@ builder.defineCatalogHandler(async (args) => {
     console.log("FINAL URL:", response.url);
     console.log("HTML:", html.length);
 
-    const metas = [];
+    const results = [];
     const seen = new Set();
 
     const linkRegex =
@@ -72,9 +72,7 @@ builder.defineCatalogHandler(async (args) => {
       const href = clean(match[1]);
       const block = match[2];
 
-      // نريد روابط المسلسلات فقط
-      if (!/series/i.test(href)) continue;
-
+      if (!href) continue;
       if (seen.has(href)) continue;
 
       let name =
@@ -83,92 +81,73 @@ builder.defineCatalogHandler(async (args) => {
         block.match(/title=["']([^"']+)["']/i)?.[1] ||
         "";
 
-      name = clean(name);
-
-      // إذا الاسم غير موجود نحاول استخراجه من نص الرابط
       if (!name) {
-        name = clean(
-          block.replace(/<[^>]+>/g, " ")
-        );
+        name = block.replace(/<[^>]+>/g, " ");
       }
 
-      if (!name) continue;
+      name = clean(name);
+
+      /*
+        نبحث عن الروابط التي تبدو مرتبطة
+        بمسلسل أو موسم أو برنامج
+      */
+      const looksLikeContent =
+        /series|show|season|episode|مسلسل|الموسم/i.test(
+          `${href} ${name}`
+        );
+
+      if (!looksLikeContent) continue;
 
       if (
-        /kids-menu|plus icon|logo|facebook|instagram|youtube/i.test(name)
+        /kids-menu|logo|facebook|instagram|youtube/i.test(name)
       ) {
         continue;
       }
 
       seen.add(href);
 
-      metas.push({
-        id: `shahid:${metas.length + 1}`,
-        type: "series",
-        name
+      results.push({
+        name: name || "NO NAME",
+        href
       });
 
-      console.log("FOUND:", name, href);
-
-      if (metas.length >= 10) break;
+      if (results.length >= 10) break;
     }
 
-    console.log("SERIES LINKS FOUND:", metas.length);
+    console.log("FOUND:", results);
 
-    if (metas.length) {
-      return { metas };
+    if (!results.length) {
+      return {
+        metas: [
+          {
+            id: "shahid:debug3:none",
+            type: "series",
+            name:
+              `لم نجد روابط | HTTP ${response.status} | HTML ${html.length}`
+          }
+        ]
+      };
     }
-
-    // تشخيص إذا لم نجد روابط بالطريقة المتوقعة
-    const allHrefs =
-      [...html.matchAll(/href=["']([^"']+)["']/gi)]
-        .map(x => x[1]);
-
-    const seriesHrefs =
-      allHrefs.filter(x => /series/i.test(x));
-
-    const uniqueSeries =
-      [...new Set(seriesHrefs)];
 
     return {
-      metas: [
-        {
-          id: "shahid:debug:1",
-          type: "series",
-          name:
-            `HTTP ${response.status} | HTML ${html.length}`
-        },
-        {
-          id: "shahid:debug:2",
-          type: "series",
-          name:
-            `All links = ${allHrefs.length}`
-        },
-        {
-          id: "shahid:debug:3",
-          type: "series",
-          name:
-            `Series links = ${uniqueSeries.length}`
-        },
-        {
-          id: "shahid:debug:4",
-          type: "series",
-          name:
-            uniqueSeries.length
-              ? `FIRST: ${clean(uniqueSeries[0]).slice(0, 250)}`
-              : "لم نجد روابط series"
-        }
-      ]
+      metas: results.map((item, index) => ({
+        id: `shahid:debug3:${index + 1}`,
+        type: "series",
+
+        // نظهر الاسم والرابط نفسه في النتيجة
+        name:
+          `${index + 1}. ${item.name} | ${item.href}`.slice(0, 450)
+      }))
     };
 
   } catch (error) {
 
-    console.error("SHAHID ERROR:", error);
+    console.error("SHAHID DEBUG 3 ERROR:", error);
 
     return {
       metas: [
         {
-          id: "shahid:error",
+          id: "shahid:debug3:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
