@@ -2,7 +2,7 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
   id: "org.khalid.netflix.sa.test",
-  version: "1.0.5",
+  version: "1.0.6",
   name: "🧪 Netflix السعودية - تجريبي",
   description: "اختبار كتالوج Netflix السعودية مباشرة",
   resources: ["catalog", "meta"],
@@ -24,6 +24,16 @@ const NETFLIX_URL =
 const HEADERS = {
   "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8"
 };
+
+// ===== Cache =====
+const CACHE_TIME = 6 * 60 * 60 * 1000; // 6 ساعات
+
+let catalogCache = {
+  metas: null,
+  time: 0
+};
+
+const metaCache = new Map();
 
 async function getPage(url) {
   const response = await fetch(url, {
@@ -184,7 +194,21 @@ builder.defineCatalogHandler(async (args) => {
   }
 
   try {
-    console.log("Fetching Netflix Saudi catalog...");
+    const now = Date.now();
+
+    // إذا الكتالوج محفوظ وأقل من 6 ساعات نرجعه فوراً
+    if (
+      catalogCache.metas &&
+      now - catalogCache.time < CACHE_TIME
+    ) {
+      console.log("Netflix catalog: CACHE HIT ⚡");
+
+      return {
+        metas: catalogCache.metas
+      };
+    }
+
+    console.log("Netflix catalog: CACHE MISS - fetching...");
 
     const html = await getPage(NETFLIX_URL);
     const items = extractNetflix(html).slice(0, 30);
@@ -193,15 +217,20 @@ builder.defineCatalogHandler(async (args) => {
 
     const metas = [];
 
-    // نسحب الصور على دفعات صغيرة حتى لا نضغط على Netflix
     for (let i = 0; i < items.length; i += 5) {
       const batch = items.slice(i, i + 5);
+
       const results = await Promise.all(
         batch.map(enrichItem)
       );
 
       metas.push(...results);
     }
+
+    catalogCache = {
+      metas,
+      time: Date.now()
+    };
 
     const realPosters = metas.filter(
       item => !item.poster.includes("dummyimage")
@@ -211,9 +240,21 @@ builder.defineCatalogHandler(async (args) => {
       `Netflix real posters: ${realPosters}/${metas.length}`
     );
 
+    console.log("Netflix catalog saved to cache ✅");
+
     return { metas };
   } catch (error) {
     console.error("Netflix catalog error:", error);
+
+    // لو Netflix تعطل مؤقتاً وعندنا نسخة قديمة نستخدمها
+    if (catalogCache.metas) {
+      console.log("Using old Netflix cache");
+
+      return {
+        metas: catalogCache.metas
+      };
+    }
+
     return { metas: [] };
   }
 });
@@ -225,6 +266,19 @@ builder.defineMetaHandler(async (args) => {
 
     if (!/^\d+$/.test(netflixId)) {
       return { meta: null };
+    }
+
+    const cached = metaCache.get(netflixId);
+
+    if (
+      cached &&
+      Date.now() - cached.time < CACHE_TIME
+    ) {
+      console.log(`Netflix meta ${netflixId}: CACHE HIT ⚡`);
+
+      return {
+        meta: cached.meta
+      };
     }
 
     const html = await getPage(
@@ -256,6 +310,11 @@ builder.defineMetaHandler(async (args) => {
       meta.poster = poster;
       meta.background = poster;
     }
+
+    metaCache.set(netflixId, {
+      meta,
+      time: Date.now()
+    });
 
     return { meta };
   } catch (error) {
