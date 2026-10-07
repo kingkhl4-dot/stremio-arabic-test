@@ -19,7 +19,7 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 const SERIES_URL =
-  "https://www.netflix.com/sa/browse/genre/83";
+  "https://www.netflix.com/us/browse/genre/83";
 
 const HEADERS = {
   "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
