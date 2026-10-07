@@ -1,24 +1,25 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.shahid.series.debug4",
-  version: "4.0.0",
-  name: "🧪 Shahid Series Debug 4",
-  description: "استخراج معرفات مسلسلات شاهد من الصفحة العامة",
+  id: "org.khalid.shahid.series.latest",
+  version: "5.0.0",
+  name: "🧪 Shahid Series Latest",
+  description: "اختبار استخراج أحدث مسلسلات شاهد",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "shahid_series_debug4",
-      name: "شاهد - فحص معرفات المسلسلات"
+      id: "shahid_series_latest",
+      name: "شاهد - أحدث المسلسلات"
     }
   ]
 };
 
 const builder = new addonBuilder(manifest);
 
-const SHAHID_URL = "https://shahid.mbc.net/ar/series";
+const SHAHID_URL =
+  "https://shahid.mbc.net/ar/series?sort=latest";
 
 const HEADERS = {
   "User-Agent":
@@ -28,7 +29,7 @@ const HEADERS = {
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 };
 
-function decodeText(text) {
+function decodeHtml(text) {
   return String(text || "")
     .replace(/\\u002F/gi, "/")
     .replace(/\\\//g, "/")
@@ -38,13 +39,17 @@ function decodeText(text) {
     .trim();
 }
 
-function decodeSlug(slug) {
+function cleanName(slug) {
   try {
     return decodeURIComponent(slug)
       .replace(/-/g, " ")
+      .replace(/\s+/g, " ")
       .trim();
   } catch {
-    return slug.replace(/-/g, " ").trim();
+    return slug
+      .replace(/-/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 }
 
@@ -52,7 +57,7 @@ builder.defineCatalogHandler(async (args) => {
 
   if (
     args.type !== "series" ||
-    args.id !== "shahid_series_debug4"
+    args.id !== "shahid_series_latest"
   ) {
     return { metas: [] };
   }
@@ -65,18 +70,18 @@ builder.defineCatalogHandler(async (args) => {
     });
 
     let html = await response.text();
-
-    html = decodeText(html);
+    html = decodeHtml(html);
 
     console.log("HTTP:", response.status);
+    console.log("FINAL URL:", response.url);
     console.log("HTML:", html.length);
 
-    const found = [];
+    const results = [];
     const seen = new Set();
 
     /*
-      مثال متوقع:
-      /ar/series/اسم-المسلسل/series-141486
+      نبحث عن:
+      /ar/series/اسم-المسلسل/series-123456
     */
     const regex =
       /\/(?:ar\/)?series\/([^"'<>?\s]+?)\/series-(\d+)/gi;
@@ -92,75 +97,72 @@ builder.defineCatalogHandler(async (args) => {
 
       seen.add(shahidId);
 
-      const name = decodeSlug(slug);
-
-      found.push({
-        shahidId,
-        name,
+      results.push({
+        id: shahidId,
+        name: cleanName(slug),
         path: match[0]
       });
 
-      console.log(
-        "FOUND:",
-        shahidId,
-        name,
-        match[0]
-      );
-
-      if (found.length >= 10) break;
+      if (results.length >= 10) break;
     }
 
-    if (found.length) {
+    console.log("FOUND:", results);
 
+    if (results.length) {
       return {
-        metas: found.map(item => ({
-          id: `shahid:${item.shahidId}`,
+        metas: results.map((item, index) => ({
+          id: `shahid:${item.id}`,
           type: "series",
-          name: `${item.name} | ID ${item.shahidId}`
+          name:
+            `${index + 1}. ${item.name} | ID ${item.id}`
         }))
       };
     }
 
-    // إذا لم نجد، نحسب أي ظهور لـ series-ID
+    /*
+      احتياط:
+      إذا ما وجدنا المسارات الكاملة،
+      نحسب جميع series-ID الموجودة.
+    */
     const rawIds = [
       ...html.matchAll(/series-(\d+)/gi)
-    ].map(x => x[1]);
+    ].map(match => match[1]);
 
     const uniqueIds = [...new Set(rawIds)];
 
     return {
       metas: [
         {
-          id: "shahid:debug4:status",
+          id: "shahid:latest:status",
           type: "series",
           name:
             `HTTP ${response.status} | HTML ${html.length}`
         },
         {
-          id: "shahid:debug4:ids",
+          id: "shahid:latest:count",
           type: "series",
           name:
-            `series-ID = ${uniqueIds.length}`
+            `عدد series-ID = ${uniqueIds.length}`
         },
         {
-          id: "shahid:debug4:first",
+          id: "shahid:latest:first",
           type: "series",
           name:
             uniqueIds.length
-              ? `FIRST ID = ${uniqueIds[0]}`
-              : "لم نجد أي series-ID"
+              ? `أول ID = ${uniqueIds[0]}`
+              : "لم نجد series-ID"
         }
       ]
     };
 
   } catch (error) {
 
-    console.error("SHAHID DEBUG 4 ERROR:", error);
+    console.error("SHAHID LATEST ERROR:", error);
 
     return {
       metas: [
         {
-          id: "shahid:debug4:error",
+          id: "shahid:latest:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
