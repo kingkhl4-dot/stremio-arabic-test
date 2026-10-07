@@ -1,16 +1,16 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.disney.series.links",
-  version: "2.0.0",
-  name: "🧪 Disney+ Series Links",
-  description: "اختبار روابط ومعرفات أعمال Disney+",
-  resources: ["catalog"],
+  id: "org.khalid.disney.series.posters",
+  version: "3.0.0",
+  name: "🧪 Disney+ Series Posters",
+  description: "اختبار مسلسلات Disney+ مع الصور",
+  resources: ["catalog", "meta"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "disney_series_links",
+      id: "disney_series_posters",
       name: "Disney+ - مسلسلات"
     }
   ]
@@ -28,130 +28,206 @@ const HEADERS = {
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 };
 
-function clean(text) {
+function decodeHtml(text) {
   return String(text || "")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/\s+/g, " ")
+    .replace(/\\u0026/g, "&")
+    .replace(/\\u002F/gi, "/")
+    .replace(/\\\//g, "/")
     .trim();
+}
+
+async function getPage(url) {
+  const response = await fetch(url, {
+    headers: HEADERS,
+    redirect: "follow"
+  });
+
+  if (!response.ok) {
+    throw new Error(`Disney HTTP ${response.status}`);
+  }
+
+  return await response.text();
+}
+
+function extractPoster(html) {
+
+  const decoded = decodeHtml(html);
+
+  // نحاول أولاً og:image
+  const ogImage =
+    decoded.match(
+      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    decoded.match(
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i
+    )?.[1];
+
+  if (ogImage) {
+    return decodeHtml(ogImage);
+  }
+
+  // وإذا ما وجدناه نجرب روابط صور Disney
+  const image =
+    decoded.match(
+      /https?:\/\/[^"' <]+\.(?:jpg|jpeg|png|webp)(?:\?[^"' <]*)?/i
+    )?.[0];
+
+  return image ? decodeHtml(image) : "";
+}
+
+function extractDescription(html) {
+
+  const decoded = decodeHtml(html);
+
+  return decodeHtml(
+    decoded.match(
+      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    decoded.match(
+      /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    ""
+  );
+}
+
+function extractItems(html) {
+
+  const items = [];
+  const seen = new Set();
+
+  const regex =
+    /<a[^>]+href=["']([^"']*\/browse\/entity-([a-zA-Z0-9-]+)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+  let match;
+
+  while ((match = regex.exec(html)) !== null) {
+
+    const href = decodeHtml(match[1]);
+    const entityId = match[2];
+    const block = match[3];
+
+    if (seen.has(entityId)) continue;
+
+    let name =
+      block.match(/alt=["']([^"']+)["']/i)?.[1] ||
+      block.match(/aria-label=["']([^"']+)["']/i)?.[1] ||
+      "";
+
+    name = decodeHtml(name);
+
+    if (!name) continue;
+
+    if (
+      /disney\+?|logo|hbo max|bundle|espn|hulu/i.test(name)
+    ) {
+      continue;
+    }
+
+    seen.add(entityId);
+
+    let url;
+
+    if (href.startsWith("http")) {
+      url = href;
+    } else {
+      url = `https://www.disneyplus.com${href}`;
+    }
+
+    items.push({
+      entityId,
+      name,
+      url
+    });
+
+    if (items.length >= 10) break;
+  }
+
+  return items;
+}
+
+async function enrichItem(item) {
+
+  try {
+
+    const html = await getPage(item.url);
+
+    const poster = extractPoster(html);
+
+    console.log(
+      "POSTER:",
+      item.name,
+      poster ? "YES" : "NO"
+    );
+
+    const meta = {
+      id: `disney:${item.entityId}`,
+      type: "series",
+      name: item.name
+    };
+
+    if (poster) {
+      meta.poster = poster;
+      meta.background = poster;
+    }
+
+    return meta;
+
+  } catch (error) {
+
+    console.error(
+      "ITEM ERROR:",
+      item.name,
+      error.message
+    );
+
+    return {
+      id: `disney:${item.entityId}`,
+      type: "series",
+      name: item.name
+    };
+  }
 }
 
 builder.defineCatalogHandler(async (args) => {
 
   if (
     args.type !== "series" ||
-    args.id !== "disney_series_links"
+    args.id !== "disney_series_posters"
   ) {
     return { metas: [] };
   }
 
   try {
 
-    const response = await fetch(DISNEY_URL, {
-      headers: HEADERS,
-      redirect: "follow"
-    });
+    const html = await getPage(DISNEY_URL);
 
-    const html = await response.text();
+    const items = extractItems(html);
 
-    console.log("HTTP:", response.status);
-    console.log("HTML:", html.length);
+    console.log("ITEMS:", items.length);
 
     const metas = [];
-    const seen = new Set();
 
-    /*
-      نبحث عن رابط Disney entity
-      ونفحص المحتوى القريب منه للحصول على اسم الصورة
-    */
-    const linkRegex =
-      /<a[^>]+href=["']([^"']*\/browse\/entity-([a-zA-Z0-9-]+)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    // دفعات صغيرة حتى ما نضغط على Disney
+    for (let i = 0; i < items.length; i += 5) {
 
-    let match;
+      const batch = items.slice(i, i + 5);
 
-    while ((match = linkRegex.exec(html)) !== null) {
+      const results =
+        await Promise.all(
+          batch.map(enrichItem)
+        );
 
-      const href = clean(match[1]);
-      const entityId = clean(match[2]);
-      const block = match[3];
-
-      if (!entityId || seen.has(entityId)) continue;
-
-      let name =
-        block.match(/alt=["']([^"']+)["']/i)?.[1] ||
-        block.match(/aria-label=["']([^"']+)["']/i)?.[1] ||
-        "";
-
-      name = clean(name);
-
-      if (!name) continue;
-
-      if (
-        /disney\+?|logo|hbo max|bundle|espn|hulu/i.test(name)
-      ) {
-        continue;
-      }
-
-      seen.add(entityId);
-
-      metas.push({
-        id: `disney:${entityId}`,
-        type: "series",
-        name: name
-      });
-
-      console.log(
-        "FOUND:",
-        name,
-        entityId,
-        href
-      );
-
-      if (metas.length >= 10) break;
+      metas.push(...results);
     }
 
-    console.log("ENTITY RESULTS:", metas.length);
-
-    if (metas.length) {
-      return { metas };
-    }
-
-    // إذا ما اشتغل الربط، نعرف هل روابط entity موجودة أصلًا
-    const entityLinks =
-      html.match(/\/browse\/entity-[a-zA-Z0-9-]+/gi) || [];
-
-    const uniqueEntities =
-      [...new Set(entityLinks)];
-
-    return {
-      metas: [
-        {
-          id: "disney:debug:1",
-          type: "series",
-          name:
-            `HTTP ${response.status} | HTML ${html.length}`
-        },
-        {
-          id: "disney:debug:2",
-          type: "series",
-          name:
-            `Entity links = ${uniqueEntities.length}`
-        },
-        {
-          id: "disney:debug:3",
-          type: "series",
-          name:
-            uniqueEntities.length
-              ? `FIRST: ${uniqueEntities[0]}`
-              : "لم نجد روابط entity"
-        }
-      ]
-    };
+    return { metas };
 
   } catch (error) {
 
-    console.error("DISNEY ERROR:", error);
+    console.error("CATALOG ERROR:", error);
 
     return {
       metas: [
@@ -162,6 +238,48 @@ builder.defineCatalogHandler(async (args) => {
         }
       ]
     };
+  }
+});
+
+builder.defineMetaHandler(async (args) => {
+
+  try {
+
+    const entityId =
+      String(args.id || "")
+        .replace("disney:", "");
+
+    if (!entityId) {
+      return { meta: null };
+    }
+
+    const url =
+      `https://www.disneyplus.com/browse/entity-${entityId}`;
+
+    const html = await getPage(url);
+
+    const poster = extractPoster(html);
+    const description = extractDescription(html);
+
+    const meta = {
+      id: `disney:${entityId}`,
+      type: "series",
+      name: "Disney+",
+      description
+    };
+
+    if (poster) {
+      meta.poster = poster;
+      meta.background = poster;
+    }
+
+    return { meta };
+
+  } catch (error) {
+
+    console.error("META ERROR:", error);
+
+    return { meta: null };
   }
 });
 
