@@ -1,17 +1,17 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.netflix.series.debug2",
-  version: "2.0.0",
-  name: "🧪 Netflix Series Debug 2",
-  description: "تشخيص بيانات مسلسلات Netflix",
+  id: "org.khalid.netflix.series.debug3",
+  version: "3.0.0",
+  name: "🧪 Netflix Series Debug 3",
+  description: "فحص JSON داخل صفحة Netflix",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "netflix_series_debug2",
-      name: "Netflix Series Debug 2"
+      id: "netflix_series_debug3",
+      name: "Netflix Series Debug 3"
     }
   ]
 };
@@ -27,130 +27,130 @@ const HEADERS = {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"
 };
 
-async function getPage(url) {
-  const response = await fetch(url, {
+async function getPage() {
+  const response = await fetch(SERIES_URL, {
     headers: HEADERS,
     redirect: "follow"
   });
 
   return {
     status: response.status,
-    url: response.url,
     html: await response.text()
   };
 }
 
-function countMatches(html, regex) {
-  return (html.match(regex) || []).length;
+function safeText(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
 }
 
 builder.defineCatalogHandler(async (args) => {
+
   if (
     args.type !== "series" ||
-    args.id !== "netflix_series_debug2"
+    args.id !== "netflix_series_debug3"
   ) {
     return { metas: [] };
   }
 
   try {
-    const result = await getPage(SERIES_URL);
+
+    const result = await getPage();
     const html = result.html;
 
-    const tests = [
-      {
-        name: "videoId",
-        regex: /"videoId"\s*:\s*"?\d+"?/gi
-      },
-      {
-        name: "video_id",
-        regex: /"video_id"\s*:\s*"?\d+"?/gi
-      },
-      {
-        name: "titleId",
-        regex: /"titleId"\s*:\s*"?\d+"?/gi
-      },
-      {
-        name: "title_id",
-        regex: /"title_id"\s*:\s*"?\d+"?/gi
-      },
-      {
-        name: "movieId",
-        regex: /"movieId"\s*:\s*"?\d+"?/gi
-      },
-      {
-        name: "id",
-        regex: /"id"\s*:\s*"?\d{6,10}"?/gi
-      },
-      {
-        name: "nflximg",
-        regex: /nflximg\.net/gi
-      },
-      {
-        name: "nflxso",
-        regex: /nflxso\.net/gi
-      },
-      {
-        name: "application-json",
-        regex: /application\/(?:ld\+)?json/gi
-      }
-    ];
+    const scriptRegex =
+      /<script[^>]+type=["']application\/(?:ld\+)?json["'][^>]*>([\s\S]*?)<\/script>/gi;
+
+    const blocks = [];
+
+    let match;
+
+    while ((match = scriptRegex.exec(html)) !== null) {
+      blocks.push(match[1]);
+    }
 
     const metas = [
       {
-        id: "debug2:page",
+        id: "debug3:page",
         type: "series",
-        name:
-          `HTTP ${result.status} | HTML ${html.length}`
+        name: `HTTP ${result.status} | JSON blocks ${blocks.length}`
       }
     ];
 
-    for (const test of tests) {
-      const count = countMatches(
-        html,
-        test.regex
-      );
+    blocks.forEach((raw, index) => {
+
+      let description =
+        `JSON ${index + 1} | length ${raw.length}`;
+
+      try {
+
+        const parsed = JSON.parse(raw);
+
+        if (Array.isArray(parsed)) {
+          description +=
+            ` | ARRAY ${parsed.length}`;
+
+          if (
+            parsed.length > 0 &&
+            parsed[0] &&
+            typeof parsed[0] === "object"
+          ) {
+            description +=
+              ` | keys: ${Object.keys(parsed[0])
+                .slice(0, 8)
+                .join(",")}`;
+          }
+
+        } else if (
+          parsed &&
+          typeof parsed === "object"
+        ) {
+
+          const keys =
+            Object.keys(parsed).slice(0, 12);
+
+          description +=
+            ` | keys: ${keys.join(",")}`;
+        }
+
+      } catch (error) {
+
+        description +=
+          ` | NOT PARSED | ${safeText(raw)}`;
+      }
 
       metas.push({
-        id: `debug2:${test.name}`,
+        id: `debug3:json${index + 1}`,
         type: "series",
-        name: `${test.name} = ${count}`
+        name: description
       });
-    }
+    });
 
-    // نأخذ أمثلة فقط بدون إغراق الصفحة
-    const interesting =
-      html.match(
-        /.{0,80}(?:videoId|titleId|movieId).{0,120}/gi
-      ) || [];
-
-    console.log("===== DEBUG 2 =====");
+    console.log("===== DEBUG 3 =====");
     console.log("HTTP:", result.status);
-    console.log("URL:", result.url);
     console.log("HTML:", html.length);
+    console.log("JSON blocks:", blocks.length);
 
-    for (const test of tests) {
+    blocks.forEach((raw, i) => {
       console.log(
-        test.name,
-        countMatches(html, test.regex)
+        `JSON ${i + 1}:`,
+        safeText(raw)
       );
-    }
-
-    console.log(
-      "Samples:",
-      interesting.slice(0, 10)
-    );
+    });
 
     console.log("===================");
 
     return { metas };
 
   } catch (error) {
-    console.error("DEBUG 2 ERROR:", error);
+
+    console.error("DEBUG 3 ERROR:", error);
 
     return {
       metas: [
         {
-          id: "debug2:error",
+          id: "debug3:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
