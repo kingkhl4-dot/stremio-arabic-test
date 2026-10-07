@@ -2,35 +2,50 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
   id: "org.khalid.netflix.sa.test",
-  version: "1.0.7",
+  version: "1.0.8",
   name: "🧪 Netflix - تجريبي",
   description: "اختبار كتالوج Netflix",
   resources: ["catalog", "meta"],
-  types: ["movie"],
+  types: ["movie", "series"],
   catalogs: [
     {
       type: "movie",
-      id: "netflix_sa_movies",
-      name: "Netflix"
+      id: "netflix_movies",
+      name: "Netflix - أفلام"
+    },
+    {
+      type: "series",
+      id: "netflix_series",
+      name: "Netflix - مسلسلات"
     }
   ]
 };
 
 const builder = new addonBuilder(manifest);
 
-const NETFLIX_URL =
+// صفحات Netflix السعودية العامة
+const MOVIES_URL =
   "https://www.netflix.com/sa/browse/genre/34399";
+
+const SERIES_URL =
+  "https://www.netflix.com/sa/browse/genre/83";
 
 const HEADERS = {
   "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8"
 };
 
-// ===== Cache =====
+// ===== Cache لمدة 6 ساعات =====
 const CACHE_TIME = 6 * 60 * 60 * 1000;
 
-let catalogCache = {
-  metas: null,
-  time: 0
+const catalogCache = {
+  movie: {
+    metas: null,
+    time: 0
+  },
+  series: {
+    metas: null,
+    time: 0
+  }
 };
 
 const metaCache = new Map();
@@ -67,7 +82,7 @@ function cleanName(text) {
     .trim();
 }
 
-function extractNetflix(html) {
+function extractNetflix(html, type) {
   const metas = [];
   const seen = new Set();
 
@@ -93,6 +108,7 @@ function extractNetflix(html) {
 
     if (!name) {
       const start = Math.max(0, match.index - 500);
+
       const end = Math.min(
         html.length,
         linkRegex.lastIndex + 500
@@ -115,7 +131,7 @@ function extractNetflix(html) {
     metas.push({
       id: `netflix:${netflixId}`,
       netflixId,
-      type: "movie",
+      type,
       name
     });
   }
@@ -134,14 +150,18 @@ function extractPoster(html) {
       /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i
     )?.[1];
 
-  if (ogImage) return decodeHtml(ogImage);
+  if (ogImage) {
+    return decodeHtml(ogImage);
+  }
 
   const netflixImage =
     decoded.match(
       /https?:\/\/[^"' <]+(?:nflximg\.net|nflxso\.net)[^"' <]*/i
     )?.[0];
 
-  return netflixImage ? decodeHtml(netflixImage) : "";
+  return netflixImage
+    ? decodeHtml(netflixImage)
+    : "";
 }
 
 function extractDescription(html) {
@@ -185,74 +205,97 @@ async function enrichItem(item) {
   }
 }
 
-builder.defineCatalogHandler(async (args) => {
+async function buildCatalog(type) {
+  const cache = catalogCache[type];
+  const now = Date.now();
+
   if (
-    args.type !== "movie" ||
-    args.id !== "netflix_sa_movies"
+    cache.metas &&
+    now - cache.time < CACHE_TIME
   ) {
-    return { metas: [] };
+    console.log(`${type}: CACHE HIT`);
+
+    return cache.metas;
   }
 
+  console.log(`${type}: CACHE MISS`);
+
+  const url =
+    type === "movie"
+      ? MOVIES_URL
+      : SERIES_URL;
+
+  const html = await getPage(url);
+
+  // حتى 100 عنوان لكل قسم
+  const items =
+    extractNetflix(html, type).slice(0, 100);
+
+  console.log(
+    `Netflix ${type} titles: ${items.length}`
+  );
+
+  const metas = [];
+
+  // خمس صفحات في نفس الوقت
+  for (let i = 0; i < items.length; i += 5) {
+    const batch = items.slice(i, i + 5);
+
+    const results = await Promise.all(
+      batch.map(enrichItem)
+    );
+
+    metas.push(...results);
+  }
+
+  cache.metas = metas;
+  cache.time = Date.now();
+
+  const realPosters = metas.filter(
+    item => !item.poster.includes("dummyimage")
+  ).length;
+
+  console.log(
+    `Netflix ${type} posters: ${realPosters}/${metas.length}`
+  );
+
+  return metas;
+}
+
+builder.defineCatalogHandler(async (args) => {
   try {
-    const now = Date.now();
-
     if (
-      catalogCache.metas &&
-      now - catalogCache.time < CACHE_TIME
+      args.type === "movie" &&
+      args.id === "netflix_movies"
     ) {
-      console.log("Netflix catalog: CACHE HIT");
-
       return {
-        metas: catalogCache.metas
+        metas: await buildCatalog("movie")
       };
     }
 
-    console.log("Netflix catalog: CACHE MISS - fetching...");
-
-    const html = await getPage(NETFLIX_URL);
-
-    // رفعنا الحد من 30 إلى 100
-    const items = extractNetflix(html).slice(0, 100);
-
-    console.log("Netflix titles:", items.length);
-
-    const metas = [];
-
-    // 5 طلبات في كل دفعة
-    for (let i = 0; i < items.length; i += 5) {
-      const batch = items.slice(i, i + 5);
-
-      const results = await Promise.all(
-        batch.map(enrichItem)
-      );
-
-      metas.push(...results);
+    if (
+      args.type === "series" &&
+      args.id === "netflix_series"
+    ) {
+      return {
+        metas: await buildCatalog("series")
+      };
     }
 
-    catalogCache = {
-      metas,
-      time: Date.now()
-    };
+    return { metas: [] };
 
-    const realPosters = metas.filter(
-      item => !item.poster.includes("dummyimage")
-    ).length;
-
-    console.log(
-      `Netflix real posters: ${realPosters}/${metas.length}`
+  } catch (error) {
+    console.error(
+      "Netflix catalog error:",
+      error
     );
 
-    console.log("Netflix catalog saved to cache");
+    const oldCache =
+      catalogCache[args.type]?.metas;
 
-    return { metas };
-  } catch (error) {
-    console.error("Netflix catalog error:", error);
-
-    if (catalogCache.metas) {
-      console.log("Using old Netflix cache");
-
+    if (oldCache) {
       return {
-        metas: catalogCache.metas
+        metas: oldCache
       };
     }
 
@@ -262,21 +305,24 @@ builder.defineCatalogHandler(async (args) => {
 
 builder.defineMetaHandler(async (args) => {
   try {
-    const netflixId = String(args.id || "")
-      .replace("netflix:", "");
+    const netflixId =
+      String(args.id || "")
+        .replace("netflix:", "");
 
     if (!/^\d+$/.test(netflixId)) {
       return { meta: null };
     }
 
-    const cached = metaCache.get(netflixId);
+    const cacheKey =
+      `${args.type}:${netflixId}`;
+
+    const cached =
+      metaCache.get(cacheKey);
 
     if (
       cached &&
       Date.now() - cached.time < CACHE_TIME
     ) {
-      console.log(`Netflix meta ${netflixId}: CACHE HIT`);
-
       return {
         meta: cached.meta
       };
@@ -286,25 +332,35 @@ builder.defineMetaHandler(async (args) => {
       `https://www.netflix.com/sa/title/${netflixId}`
     );
 
-    const decoded = decodeHtml(html);
+    const decoded =
+      decodeHtml(html);
 
     const title =
       decoded.match(
         /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i
       )?.[1] ||
-      decoded.match(/<title>([^<]+)<\/title>/i)?.[1] ||
+      decoded.match(
+        /<title>([^<]+)<\/title>/i
+      )?.[1] ||
       `Netflix ${netflixId}`;
 
-    const poster = extractPoster(html);
-    const description = extractDescription(html);
+    const poster =
+      extractPoster(html);
+
+    const description =
+      extractDescription(html);
 
     const meta = {
       id: `netflix:${netflixId}`,
-      type: "movie",
+      type: args.type,
       name: cleanName(title)
-        .replace(/\s*[-|]\s*Netflix.*$/i, "")
+        .replace(
+          /\s*[-|]\s*Netflix.*$/i,
+          ""
+        )
         .trim(),
-      description: decodeHtml(description)
+      description:
+        decodeHtml(description)
     };
 
     if (poster) {
@@ -312,18 +368,26 @@ builder.defineMetaHandler(async (args) => {
       meta.background = poster;
     }
 
-    metaCache.set(netflixId, {
+    metaCache.set(cacheKey, {
       meta,
       time: Date.now()
     });
 
     return { meta };
+
   } catch (error) {
-    console.error("Netflix meta error:", error);
+    console.error(
+      "Netflix meta error:",
+      error
+    );
+
     return { meta: null };
   }
 });
 
-serveHTTP(builder.getInterface(), {
-  port: process.env.PORT || 7000
-});
+serveHTTP(
+  builder.getInterface(),
+  {
+    port: process.env.PORT || 7000
+  }
+);
