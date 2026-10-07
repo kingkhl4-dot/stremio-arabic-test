@@ -2,10 +2,10 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
   id: "org.khalid.netflix.sa.test",
-  version: "1.0.2",
+  version: "1.0.3",
   name: "🧪 Netflix السعودية - تجريبي",
-  description: "اختبار كتالوج Netflix السعودية العام",
-  resources: ["catalog"],
+  description: "اختبار بيانات Netflix السعودية مباشرة",
+  resources: ["catalog", "meta"],
   types: ["movie"],
   catalogs: [
     {
@@ -21,19 +21,11 @@ const builder = new addonBuilder(manifest);
 const NETFLIX_URL =
   "https://www.netflix.com/sa/browse/genre/34399";
 
-async function getNetflixPage() {
-  const response = await fetch(NETFLIX_URL, {
-    headers: {
-      "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8"
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Netflix HTTP ${response.status}`);
-  }
-
-  return response.text();
-}
+const headers = {
+  "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"
+};
 
 function decodeHtml(text) {
   return String(text || "")
@@ -43,8 +35,11 @@ function decodeHtml(text) {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/\\u0026/g, "&")
-    .replace(/\\u0027/g, "'")
-    .replace(/\\u0022/g, '"')
+    .replace(/\\u002F/g, "/")
+    .replace(/\\u002f/g, "/")
+    .replace(/\\u003A/g, ":")
+    .replace(/\\u003a/g, ":")
+    .replace(/\\\//g, "/")
     .trim();
 }
 
@@ -55,59 +50,77 @@ function cleanName(text) {
     .trim();
 }
 
-function extractNetflix(html) {
+function findImage(text) {
+  const decoded = decodeHtml(text);
+
+  const patterns = [
+    /https?:\/\/[^"'\\\s]+nflximg\.net[^"'\\\s<]*/i,
+    /https?:\/\/[^"'\\\s]+nflxso\.net[^"'\\\s<]*/i,
+    /<img[^>]+src="([^"]+)"/i,
+    /<img[^>]+srcset="([^"]+)"/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = decoded.match(pattern);
+
+    if (match) {
+      let url = match[1] || match[0];
+
+      if (url.includes(",")) {
+        url = url.split(",")[0].trim().split(" ")[0];
+      }
+
+      return decodeHtml(url);
+    }
+  }
+
+  return "";
+}
+
+async function fetchPage(url) {
+  const response = await fetch(url, { headers });
+
+  if (!response.ok) {
+    throw new Error(`Netflix HTTP ${response.status}`);
+  }
+
+  return response.text();
+}
+
+function extractCatalog(html) {
   const metas = [];
   const seen = new Set();
 
-  /*
-    نبحث عن روابط Netflix العامة التي تحتوي على title ID،
-    ثم نقرأ النص والصورة الموجودة بالقرب منها.
-  */
-  const linkRegex =
+  const regex =
     /<a[^>]+href="([^"]*\/title\/(\d+)[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
 
   let match;
 
-  while ((match = linkRegex.exec(html)) !== null) {
+  while ((match = regex.exec(html)) !== null) {
     const netflixId = match[2];
 
     if (seen.has(netflixId)) continue;
 
-    const block = match[3];
+    const around = html.slice(
+      Math.max(0, match.index - 1200),
+      Math.min(html.length, regex.lastIndex + 1200)
+    );
 
     const alt =
-      block.match(/alt="([^"]+)"/i)?.[1] || "";
+      match[3].match(/alt="([^"]+)"/i)?.[1] ||
+      around.match(/alt="([^"]+)"/i)?.[1] ||
+      "";
 
     const aria =
-      block.match(/aria-label="([^"]+)"/i)?.[1] || "";
+      match[3].match(/aria-label="([^"]+)"/i)?.[1] ||
+      around.match(/aria-label="([^"]+)"/i)?.[1] ||
+      "";
 
-    const img =
-      block.match(/<img[^>]+src="([^"]+)"/i)?.[1] || "";
-
-    let name = cleanName(alt || aria);
-
-    /*
-      بعض أسماء Netflix تكون في خصائص العنصر نفسه،
-      لذلك نأخذ جزءاً من HTML حول الرابط كخيار إضافي.
-    */
-    if (!name) {
-      const start = Math.max(0, match.index - 500);
-      const end = Math.min(
-        html.length,
-        linkRegex.lastIndex + 500
-      );
-
-      const around = html.slice(start, end);
-
-      const nearby =
-        around.match(/aria-label="([^"]+)"/i)?.[1] ||
-        around.match(/alt="([^"]+)"/i)?.[1] ||
-        "";
-
-      name = cleanName(nearby);
-    }
+    const name = cleanName(alt || aria);
 
     if (!name) continue;
+
+    const poster = findImage(match[3]) || findImage(around);
 
     seen.add(netflixId);
 
@@ -116,7 +129,7 @@ function extractNetflix(html) {
       type: "movie",
       name,
       poster:
-        img ||
+        poster ||
         "https://dummyimage.com/300x450/111/ffffff.png&text=Netflix"
     });
   }
@@ -133,23 +146,81 @@ builder.defineCatalogHandler(async (args) => {
   }
 
   try {
-    console.log("Fetching Netflix Saudi...");
+    const html = await fetchPage(NETFLIX_URL);
+    const metas = extractCatalog(html);
 
-    const html = await getNetflixPage();
+    console.log("Netflix catalog:", metas.length);
+    console.log(
+      "Real posters:",
+      metas.filter(x => !x.poster.includes("dummyimage")).length
+    );
 
-    console.log("HTML length:", html.length);
-
-    const metas = extractNetflix(html);
-
-    console.log("Netflix items with ID:", metas.length);
-    console.log("First items:", metas.slice(0, 10));
-
-    return {
-      metas: metas.slice(0, 100)
-    };
+    return { metas: metas.slice(0, 100) };
   } catch (error) {
-    console.error("Netflix error:", error);
+    console.error("Catalog error:", error);
     return { metas: [] };
+  }
+});
+
+builder.defineMetaHandler(async (args) => {
+  try {
+    const netflixId = String(args.id || "")
+      .replace("netflix:", "");
+
+    if (!/^\d+$/.test(netflixId)) {
+      return { meta: null };
+    }
+
+    const url =
+      `https://www.netflix.com/sa/title/${netflixId}`;
+
+    const html = await fetchPage(url);
+    const decoded = decodeHtml(html);
+
+    const title =
+      decoded.match(
+        /<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i
+      )?.[1] ||
+      decoded.match(/<title>([^<]+)<\/title>/i)?.[1] ||
+      `Netflix ${netflixId}`;
+
+    const description =
+      decoded.match(
+        /<meta[^>]+(?:name|property)="(?:description|og:description)"[^>]+content="([^"]+)"/i
+      )?.[1] ||
+      "";
+
+    const poster =
+      decoded.match(
+        /<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i
+      )?.[1] ||
+      findImage(decoded);
+
+    const meta = {
+      id: `netflix:${netflixId}`,
+      type: "movie",
+      name: cleanName(title)
+        .replace(/\s*-\s*Netflix.*$/i, "")
+        .trim(),
+      description: decodeHtml(description)
+    };
+
+    if (poster) {
+      meta.poster = decodeHtml(poster);
+      meta.background = decodeHtml(poster);
+    }
+
+    console.log(
+      "META",
+      netflixId,
+      "poster:",
+      poster ? "YES" : "NO"
+    );
+
+    return { meta };
+  } catch (error) {
+    console.error("Meta error:", error);
+    return { meta: null };
   }
 });
 
