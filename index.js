@@ -1,25 +1,25 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.shahid.series.landing",
-  version: "6.0.0",
-  name: "🧪 Shahid Series Landing",
-  description: "اختبار صفحة مسلسلات شاهد البديلة",
-  resources: ["catalog"],
+  id: "org.khalid.crunchyroll.anime.test",
+  version: "1.0.0",
+  name: "🧪 Crunchyroll Anime",
+  description: "اختبار مكتبة Crunchyroll العامة",
+  resources: ["catalog", "meta"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "shahid_series_landing",
-      name: "شاهد - Landing Series"
+      id: "crunchyroll_anime",
+      name: "Crunchyroll"
     }
   ]
 };
 
 const builder = new addonBuilder(manifest);
 
-const SHAHID_URL =
-  "https://shahid.mbc.net/ar/landingpages/series";
+const BASE = "https://www.crunchyroll.com";
+const CATALOG_URL = `${BASE}/ar/videos/new`;
 
 const HEADERS = {
   "User-Agent":
@@ -29,143 +29,321 @@ const HEADERS = {
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 };
 
-function decodeHtml(text) {
-  return String(text || "")
+const CACHE_TIME = 6 * 60 * 60 * 1000;
+
+let cache = {
+  time: 0,
+  metas: []
+};
+
+function clean(value) {
+  return String(value || "")
     .replace(/\\u002F/gi, "/")
     .replace(/\\\//g, "/")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-function cleanName(slug) {
-  try {
-    return decodeURIComponent(slug)
-      .replace(/-/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  } catch {
-    return slug
-      .replace(/-/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+function absoluteUrl(url) {
+  url = clean(url);
+
+  if (!url) return null;
+
+  if (url.startsWith("//")) {
+    return `https:${url}`;
   }
+
+  if (url.startsWith("/")) {
+    return `${BASE}${url}`;
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    return url;
+  }
+
+  return null;
 }
 
-builder.defineCatalogHandler(async (args) => {
+function extractSeries(html) {
+
+  html = clean(html);
+
+  const results = [];
+  const seen = new Set();
+
+  /*
+    Crunchyroll:
+    /ar/series/GDKHZEJ0K/solo-leveling
+  */
+
+  const regex =
+    /\/(?:[a-z]{2}\/)?series\/([A-Z0-9]+)\/([^"'<>?#\s]+)/gi;
+
+  let match;
+
+  while ((match = regex.exec(html)) !== null) {
+
+    const id = match[1];
+    const slug = match[2];
+
+    if (!id || seen.has(id)) continue;
+
+    seen.add(id);
+
+    let name;
+
+    try {
+      name = decodeURIComponent(slug)
+        .replace(/-/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    } catch {
+      name = slug.replace(/-/g, " ");
+    }
+
+    results.push({
+      id,
+      name,
+      url: `${BASE}/ar/series/${id}/${slug}`
+    });
+
+    if (results.length >= 10) break;
+  }
+
+  return results;
+}
+
+function extractMeta(html, fallbackName, id) {
+
+  const title =
+    html.match(
+      /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    html.match(
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i
+    )?.[1] ||
+    fallbackName;
+
+  const description =
+    html.match(
+      /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    html.match(
+      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    html.match(
+      /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i
+    )?.[1] ||
+    "";
+
+  let image =
+    html.match(
+      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    html.match(
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i
+    )?.[1] ||
+    "";
+
+  image = absoluteUrl(image);
+
+  return {
+    id: `crunchyroll:${id}`,
+    type: "series",
+    name: clean(title)
+      .replace(/\s*-\s*Crunchyroll.*$/i, "")
+      .trim(),
+    description: clean(description),
+    poster: image || undefined,
+    background: image || undefined,
+    posterShape: "poster"
+  };
+}
+
+async function fetchPage(url) {
+
+  const response = await fetch(url, {
+    headers: HEADERS,
+    redirect: "follow"
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  return await response.text();
+}
+
+async function getCatalog() {
+
+  if (
+    cache.metas.length &&
+    Date.now() - cache.time < CACHE_TIME
+  ) {
+    return cache.metas;
+  }
+
+  const html = await fetchPage(CATALOG_URL);
+
+  const items = extractSeries(html);
+
+  console.log(
+    "Crunchyroll series found:",
+    items.length
+  );
+
+  const metas = [];
+
+  /*
+    دفعات صغيرة حتى ما نضغط الموقع
+  */
+
+  for (let i = 0; i < items.length; i += 5) {
+
+    const batch = items.slice(i, i + 5);
+
+    const data = await Promise.all(
+      batch.map(async item => {
+
+        try {
+
+          const page = await fetchPage(item.url);
+
+          return extractMeta(
+            page,
+            item.name,
+            item.id
+          );
+
+        } catch (error) {
+
+          console.error(
+            "META ERROR:",
+            item.id,
+            error.message
+          );
+
+          return {
+            id: `crunchyroll:${item.id}`,
+            type: "series",
+            name: item.name
+          };
+        }
+      })
+    );
+
+    metas.push(...data);
+  }
+
+  cache = {
+    time: Date.now(),
+    metas
+  };
+
+  return metas;
+}
+
+
+// ======================
+// CATALOG
+// ======================
+
+builder.defineCatalogHandler(async args => {
 
   if (
     args.type !== "series" ||
-    args.id !== "shahid_series_landing"
+    args.id !== "crunchyroll_anime"
   ) {
     return { metas: [] };
   }
 
   try {
 
-    const response = await fetch(SHAHID_URL, {
-      headers: HEADERS,
-      redirect: "follow"
-    });
+    const metas = await getCatalog();
 
-    let html = await response.text();
-    html = decodeHtml(html);
-
-    console.log("HTTP:", response.status);
-    console.log("FINAL URL:", response.url);
-    console.log("HTML:", html.length);
-
-    const results = [];
-    const seen = new Set();
-
-    // مثال:
-    // /ar/series/اسم-المسلسل/series-141486
-
-    const regex =
-      /\/(?:ar\/)?series\/([^"'<>?\s]+?)\/series-(\d+)/gi;
-
-    let match;
-
-    while ((match = regex.exec(html)) !== null) {
-
-      const slug = match[1];
-      const shahidId = match[2];
-
-      if (seen.has(shahidId)) continue;
-
-      seen.add(shahidId);
-
-      results.push({
-        id: shahidId,
-        name: cleanName(slug),
-        path: match[0]
-      });
-
-      if (results.length >= 10) break;
-    }
-
-    console.log("FOUND:", results);
-
-    if (results.length) {
-      return {
-        metas: results.map((item, index) => ({
-          id: `shahid:${item.id}`,
-          type: "series",
-          name:
-            `${index + 1}. ${item.name} | ID ${item.id}`
-        }))
-      };
-    }
-
-    // فحص احتياطي لأي series-ID داخل الصفحة
-
-    const rawIds = [
-      ...html.matchAll(/series-(\d+)/gi)
-    ].map(x => x[1]);
-
-    const uniqueIds = [...new Set(rawIds)];
-
-    return {
-      metas: [
-        {
-          id: "shahid:landing:status",
-          type: "series",
-          name:
-            `HTTP ${response.status} | HTML ${html.length}`
-        },
-        {
-          id: "shahid:landing:count",
-          type: "series",
-          name:
-            `عدد series-ID = ${uniqueIds.length}`
-        },
-        {
-          id: "shahid:landing:first",
-          type: "series",
-          name:
-            uniqueIds.length
-              ? `أول ID = ${uniqueIds[0]}`
-              : "لم نجد أي series-ID"
-        }
-      ]
-    };
+    return { metas };
 
   } catch (error) {
 
-    console.error("SHAHID LANDING ERROR:", error);
+    console.error(
+      "CRUNCHYROLL CATALOG ERROR:",
+      error
+    );
 
     return {
       metas: [
         {
-          id: "shahid:landing:error",
+          id: "crunchyroll:error",
           type: "series",
-          name: `ERROR: ${error.message}`
+          name: `Crunchyroll ERROR: ${error.message}`
         }
       ]
     };
   }
 });
+
+
+// ======================
+// META
+// ======================
+
+builder.defineMetaHandler(async args => {
+
+  if (
+    args.type !== "series" ||
+    !args.id.startsWith("crunchyroll:")
+  ) {
+    return { meta: null };
+  }
+
+  try {
+
+    const crunchyId =
+      args.id.replace("crunchyroll:", "");
+
+    /*
+      أولاً نحاول نجيبه من الكاش
+    */
+
+    const catalog = await getCatalog();
+
+    const cached = catalog.find(
+      item => item.id === args.id
+    );
+
+    if (cached) {
+      return { meta: cached };
+    }
+
+    /*
+      إذا العمل مو موجود ضمن أول 10،
+      نرجع بيانات أساسية.
+    */
+
+    return {
+      meta: {
+        id: args.id,
+        type: "series",
+        name: `Crunchyroll ${crunchyId}`
+      }
+    };
+
+  } catch (error) {
+
+    console.error(
+      "CRUNCHYROLL META ERROR:",
+      error
+    );
+
+    return { meta: null };
+  }
+});
+
 
 serveHTTP(builder.getInterface(), {
   port: process.env.PORT || 7000
