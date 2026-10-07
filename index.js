@@ -1,17 +1,17 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.netflix.series.debug4",
-  version: "4.0.0",
-  name: "🧪 Netflix Series Debug 4",
-  description: "فحص أماكن application/json في Netflix",
+  id: "org.khalid.netflix.series.debug5",
+  version: "5.0.0",
+  name: "🧪 Netflix Series Debug 5",
+  description: "فحص محتوى صفحة Netflix الفعلي",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "netflix_series_debug4",
-      name: "Netflix Series Debug 4"
+      id: "netflix_series_debug5",
+      name: "Netflix Series Debug 5"
     }
   ]
 };
@@ -24,8 +24,17 @@ const SERIES_URL =
 const HEADERS = {
   "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
   "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36",
+  "Accept":
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 };
+
+function clean(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .replace(/"/g, "'")
+    .trim();
+}
 
 async function getPage() {
   const response = await fetch(SERIES_URL, {
@@ -35,118 +44,129 @@ async function getPage() {
 
   return {
     status: response.status,
-    url: response.url,
+    finalUrl: response.url,
+    contentType:
+      response.headers.get("content-type") || "",
     html: await response.text()
   };
 }
 
-function clean(text) {
-  return String(text || "")
-    .replace(/\s+/g, " ")
-    .replace(/"/g, "'")
-    .trim();
-}
-
 builder.defineCatalogHandler(async (args) => {
+
   if (
     args.type !== "series" ||
-    args.id !== "netflix_series_debug4"
+    args.id !== "netflix_series_debug5"
   ) {
     return { metas: [] };
   }
 
   try {
+
     const result = await getPage();
     const html = result.html;
 
-    const needle = "application/json";
-    const positions = [];
+    const title =
+      html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ||
+      "NO TITLE";
 
-    let position = 0;
+    const description =
+      html.match(
+        /<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i
+      )?.[1] ||
+      "NO DESCRIPTION";
 
-    while (true) {
-      const found = html
-        .toLowerCase()
-        .indexOf(needle, position);
+    const scripts = [
+      ...html.matchAll(
+        /<script[^>]+src=["']([^"']+)["']/gi
+      )
+    ].map(x => x[1]);
 
-      if (found === -1) break;
+    const links = [
+      ...html.matchAll(
+        /<link[^>]+href=["']([^"']+)["']/gi
+      )
+    ].map(x => x[1]);
 
-      positions.push(found);
-      position = found + needle.length;
-    }
+    const firstHtml = clean(
+      html.slice(0, 1500)
+    );
 
     const metas = [
       {
-        id: "debug4:page",
+        id: "debug5:status",
         type: "series",
         name:
-          `HTTP ${result.status} | HTML ${html.length} | matches ${positions.length}`
+          `HTTP ${result.status} | HTML ${html.length}`
+      },
+      {
+        id: "debug5:type",
+        type: "series",
+        name:
+          `Content-Type: ${result.contentType}`
+      },
+      {
+        id: "debug5:title",
+        type: "series",
+        name:
+          `TITLE: ${clean(title).slice(0, 250)}`
+      },
+      {
+        id: "debug5:description",
+        type: "series",
+        name:
+          `DESC: ${clean(description).slice(0, 250)}`
+      },
+      {
+        id: "debug5:scripts",
+        type: "series",
+        name:
+          `SCRIPT SRC = ${scripts.length}`
+      },
+      {
+        id: "debug5:links",
+        type: "series",
+        name:
+          `LINK HREF = ${links.length}`
+      },
+      {
+        id: "debug5:start",
+        type: "series",
+        name:
+          `START: ${firstHtml.slice(0, 500)}`
       }
     ];
 
-    positions.slice(0, 9).forEach((pos, index) => {
-      const start = Math.max(0, pos - 180);
-      const end = Math.min(
-        html.length,
-        pos + 350
-      );
-
-      const sample = clean(
-        html.slice(start, end)
-      );
-
-      console.log(
-        `===== MATCH ${index + 1} =====`
-      );
-      console.log(sample);
-
-      // نخلي جزء من النص يظهر مباشرة في رابط الفحص
+    scripts.slice(0, 5).forEach((src, i) => {
       metas.push({
-        id: `debug4:match${index + 1}`,
+        id: `debug5:script${i}`,
         type: "series",
         name:
-          `MATCH ${index + 1}: ${sample.slice(0, 280)}`
+          `SCRIPT ${i + 1}: ${clean(src).slice(0, 300)}`
       });
     });
 
-    // فحوص إضافية تساعدنا نعرف نوع الصفحة
-    const checks = [
-      ["__NEXT_DATA__", /__NEXT_DATA__/gi],
-      ["netflix.falcor", /falcor/gi],
-      ["graphql", /graphql/gi],
-      ["lolomo", /lolomo/gi],
-      ["genreId", /genreId/gi],
-      ["jawBone", /jawBone/gi],
-      ["billboard", /billboard/gi]
-    ];
-
-    for (const [name, regex] of checks) {
-      const count =
-        (html.match(regex) || []).length;
-
-      metas.push({
-        id: `debug4:check:${name}`,
-        type: "series",
-        name: `${name} = ${count}`
-      });
-
-      console.log(`${name}: ${count}`);
-    }
-
-    console.log(
-      "Final URL:",
-      result.url
-    );
+    console.log("===== DEBUG 5 =====");
+    console.log("HTTP:", result.status);
+    console.log("Final URL:", result.finalUrl);
+    console.log("Content-Type:", result.contentType);
+    console.log("HTML length:", html.length);
+    console.log("TITLE:", clean(title));
+    console.log("DESCRIPTION:", clean(description));
+    console.log("SCRIPT SRC:", scripts.length);
+    console.log("LINK HREF:", links.length);
+    console.log("FIRST HTML:", firstHtml);
+    console.log("===================");
 
     return { metas };
 
   } catch (error) {
-    console.error("DEBUG 4 ERROR:", error);
+
+    console.error("DEBUG 5 ERROR:", error);
 
     return {
       metas: [
         {
-          id: "debug4:error",
+          id: "debug5:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
