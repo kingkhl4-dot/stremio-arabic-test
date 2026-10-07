@@ -1,17 +1,17 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.justwatch.netflix.sa.test2",
-  version: "2.0.0",
-  name: "🧪 Netflix Saudi via JustWatch",
-  description: "اختبار كتالوج Netflix السعودية عبر JustWatch",
-  resources: ["catalog"],
+  id: "org.khalid.netflix.sa.finaltest",
+  version: "3.0.0",
+  name: "🧪 Netflix السعودية",
+  description: "Netflix Saudi catalog via JustWatch + TMDB",
+  resources: ["catalog", "meta"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "netflix_sa_justwatch2",
-      name: "Netflix السعودية - JustWatch"
+      id: "netflix_sa",
+      name: "Netflix السعودية"
     }
   ]
 };
@@ -19,8 +19,21 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 const JUSTWATCH_URL = "https://apis.justwatch.com/graphql";
+const TMDB_KEY = process.env.TMDB_API_KEY;
 
-const QUERY = `
+const CACHE_TIME = 6 * 60 * 60 * 1000;
+
+let cache = {
+  time: 0,
+  metas: []
+};
+
+
+// ===========================
+// JUSTWATCH
+// ===========================
+
+const JW_QUERY = `
 query GetPopularTitles(
   $country: Country!
   $language: Language!
@@ -52,7 +65,7 @@ query GetPopularTitles(
 }
 `;
 
-async function getNetflixSaudiSeries() {
+async function getNetflixSaudi() {
 
   const response = await fetch(JUSTWATCH_URL, {
     method: "POST",
@@ -78,22 +91,15 @@ async function getNetflixSaudiSeries() {
         }
       },
 
-      query: QUERY
+      query: JW_QUERY
     })
   });
 
-  const text = await response.text();
-
-  console.log("HTTP:", response.status);
-  console.log("RESPONSE:", text.slice(0, 2000));
+  const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(
-      `HTTP ${response.status}: ${text.slice(0, 300)}`
-    );
+    throw new Error(`JustWatch HTTP ${response.status}`);
   }
-
-  const data = JSON.parse(text);
 
   if (data.errors?.length) {
     throw new Error(
@@ -105,68 +111,260 @@ async function getNetflixSaudiSeries() {
 }
 
 
+// ===========================
+// TMDB
+// ===========================
+
+async function tmdbSearch(title, year) {
+
+  if (!TMDB_KEY) {
+    throw new Error("TMDB_API_KEY غير موجود");
+  }
+
+  const params = new URLSearchParams({
+    api_key: TMDB_KEY,
+    query: title,
+    language: "ar-SA",
+    include_adult: "false"
+  });
+
+  if (year) {
+    params.set("first_air_date_year", String(year));
+  }
+
+  let response = await fetch(
+    `https://api.themoviedb.org/3/search/tv?${params}`
+  );
+
+  let data = await response.json();
+
+  // إذا السنة منعت التطابق نجرب مرة ثانية بدونها
+  if (!data.results?.length && year) {
+
+    params.delete("first_air_date_year");
+
+    response = await fetch(
+      `https://api.themoviedb.org/3/search/tv?${params}`
+    );
+
+    data = await response.json();
+  }
+
+  return data.results?.[0] || null;
+}
+
+
+async function tmdbDetails(id) {
+
+  const params = new URLSearchParams({
+    api_key: TMDB_KEY,
+    language: "ar-SA"
+  });
+
+  const response = await fetch(
+    `https://api.themoviedb.org/3/tv/${id}?${params}`
+  );
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return await response.json();
+}
+
+
+// ===========================
+// BUILD CATALOG
+// ===========================
+
+async function buildCatalog() {
+
+  if (
+    cache.metas.length &&
+    Date.now() - cache.time < CACHE_TIME
+  ) {
+    return cache.metas;
+  }
+
+  const edges = await getNetflixSaudi();
+
+  const metas = [];
+
+  for (const edge of edges.slice(0, 10)) {
+
+    const jw = edge.node;
+    const content = jw.content || {};
+
+    const title = content.title;
+    const year = content.originalReleaseYear;
+
+    if (!title) continue;
+
+    try {
+
+      const match = await tmdbSearch(title, year);
+
+      if (!match) {
+        console.log("TMDB NOT FOUND:", title);
+        continue;
+      }
+
+      const details =
+        await tmdbDetails(match.id);
+
+      const info = details || match;
+
+      const poster = info.poster_path
+        ? `https://image.tmdb.org/t/p/w500${info.poster_path}`
+        : undefined;
+
+      const background = info.backdrop_path
+        ? `https://image.tmdb.org/t/p/original${info.backdrop_path}`
+        : poster;
+
+      metas.push({
+        id: `tmdb:${match.id}`,
+        type: "series",
+
+        name:
+          info.name ||
+          match.name ||
+          title,
+
+        description:
+          info.overview ||
+          match.overview ||
+          "",
+
+        poster,
+        background,
+
+        posterShape: "poster",
+
+        releaseInfo:
+          String(
+            info.first_air_date ||
+            match.first_air_date ||
+            year ||
+            ""
+          ).slice(0, 4)
+      });
+
+    } catch (error) {
+
+      console.error(
+        "ITEM ERROR:",
+        title,
+        error.message
+      );
+    }
+  }
+
+  cache = {
+    time: Date.now(),
+    metas
+  };
+
+  return metas;
+}
+
+
+// ===========================
+// CATALOG
+// ===========================
+
 builder.defineCatalogHandler(async args => {
 
   if (
     args.type !== "series" ||
-    args.id !== "netflix_sa_justwatch2"
+    args.id !== "netflix_sa"
   ) {
     return { metas: [] };
   }
 
   try {
 
-    const edges = await getNetflixSaudiSeries();
+    const metas = await buildCatalog();
 
-    if (!edges.length) {
-      return {
-        metas: [
-          {
-            id: "jw:none",
-            type: "series",
-            name: "JustWatch رجع 0 مسلسل"
-          }
-        ]
-      };
-    }
-
-    return {
-      metas: edges.slice(0, 10).map((edge, index) => {
-
-        const node = edge.node;
-        const content = node.content || {};
-
-        const title =
-          content.title ||
-          `مسلسل ${index + 1}`;
-
-        const year =
-          content.originalReleaseYear
-            ? ` (${content.originalReleaseYear})`
-            : "";
-
-        return {
-          id: `jw:${node.objectId || node.id}`,
-          type: "series",
-          name: `${index + 1}. ${title}${year}`
-        };
-      })
-    };
+    return { metas };
 
   } catch (error) {
 
-    console.error("JUSTWATCH ERROR:", error);
+    console.error("CATALOG ERROR:", error);
 
     return {
       metas: [
         {
-          id: "jw:error",
+          id: "netflix:error",
           type: "series",
-          name:
-            `JustWatch ERROR: ${error.message}`.slice(0, 500)
+          name: `ERROR: ${error.message}`
         }
       ]
     };
+  }
+});
+
+
+// ===========================
+// META
+// ===========================
+
+builder.defineMetaHandler(async args => {
+
+  if (
+    args.type !== "series" ||
+    !args.id.startsWith("tmdb:")
+  ) {
+    return { meta: null };
+  }
+
+  try {
+
+    const tmdbId =
+      args.id.replace("tmdb:", "");
+
+    const details =
+      await tmdbDetails(tmdbId);
+
+    if (!details) {
+      return { meta: null };
+    }
+
+    const poster = details.poster_path
+      ? `https://image.tmdb.org/t/p/w500${details.poster_path}`
+      : undefined;
+
+    const background = details.backdrop_path
+      ? `https://image.tmdb.org/t/p/original${details.backdrop_path}`
+      : poster;
+
+    return {
+      meta: {
+        id: args.id,
+        type: "series",
+
+        name: details.name,
+
+        description:
+          details.overview || "",
+
+        poster,
+        background,
+
+        posterShape: "poster",
+
+        releaseInfo:
+          String(
+            details.first_air_date || ""
+          ).slice(0, 4)
+      }
+    };
+
+  } catch (error) {
+
+    console.error("META ERROR:", error);
+
+    return { meta: null };
   }
 });
 
