@@ -2,16 +2,16 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
   id: "org.khalid.netflix.sa.test",
-  version: "1.0.6",
-  name: "🧪 Netflix السعودية - تجريبي",
-  description: "اختبار كتالوج Netflix السعودية مباشرة",
+  version: "1.0.7",
+  name: "🧪 Netflix - تجريبي",
+  description: "اختبار كتالوج Netflix",
   resources: ["catalog", "meta"],
   types: ["movie"],
   catalogs: [
     {
       type: "movie",
       id: "netflix_sa_movies",
-      name: "🇸🇦 Netflix السعودية"
+      name: "Netflix"
     }
   ]
 };
@@ -26,7 +26,7 @@ const HEADERS = {
 };
 
 // ===== Cache =====
-const CACHE_TIME = 6 * 60 * 60 * 1000; // 6 ساعات
+const CACHE_TIME = 6 * 60 * 60 * 1000;
 
 let catalogCache = {
   metas: null,
@@ -196,12 +196,11 @@ builder.defineCatalogHandler(async (args) => {
   try {
     const now = Date.now();
 
-    // إذا الكتالوج محفوظ وأقل من 6 ساعات نرجعه فوراً
     if (
       catalogCache.metas &&
       now - catalogCache.time < CACHE_TIME
     ) {
-      console.log("Netflix catalog: CACHE HIT ⚡");
+      console.log("Netflix catalog: CACHE HIT");
 
       return {
         metas: catalogCache.metas
@@ -211,12 +210,15 @@ builder.defineCatalogHandler(async (args) => {
     console.log("Netflix catalog: CACHE MISS - fetching...");
 
     const html = await getPage(NETFLIX_URL);
-    const items = extractNetflix(html).slice(0, 30);
+
+    // رفعنا الحد من 30 إلى 100
+    const items = extractNetflix(html).slice(0, 100);
 
     console.log("Netflix titles:", items.length);
 
     const metas = [];
 
+    // 5 طلبات في كل دفعة
     for (let i = 0; i < items.length; i += 5) {
       const batch = items.slice(i, i + 5);
 
@@ -240,13 +242,12 @@ builder.defineCatalogHandler(async (args) => {
       `Netflix real posters: ${realPosters}/${metas.length}`
     );
 
-    console.log("Netflix catalog saved to cache ✅");
+    console.log("Netflix catalog saved to cache");
 
     return { metas };
   } catch (error) {
     console.error("Netflix catalog error:", error);
 
-    // لو Netflix تعطل مؤقتاً وعندنا نسخة قديمة نستخدمها
     if (catalogCache.metas) {
       console.log("Using old Netflix cache");
 
@@ -274,7 +275,7 @@ builder.defineMetaHandler(async (args) => {
       cached &&
       Date.now() - cached.time < CACHE_TIME
     ) {
-      console.log(`Netflix meta ${netflixId}: CACHE HIT ⚡`);
+      console.log(`Netflix meta ${netflixId}: CACHE HIT`);
 
       return {
         meta: cached.meta
