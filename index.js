@@ -1,17 +1,17 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.netflix.series.debug3",
-  version: "3.0.0",
-  name: "🧪 Netflix Series Debug 3",
-  description: "فحص JSON داخل صفحة Netflix",
+  id: "org.khalid.netflix.series.debug4",
+  version: "4.0.0",
+  name: "🧪 Netflix Series Debug 4",
+  description: "فحص أماكن application/json في Netflix",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "netflix_series_debug3",
-      name: "Netflix Series Debug 3"
+      id: "netflix_series_debug4",
+      name: "Netflix Series Debug 4"
     }
   ]
 };
@@ -35,122 +35,118 @@ async function getPage() {
 
   return {
     status: response.status,
+    url: response.url,
     html: await response.text()
   };
 }
 
-function safeText(text) {
+function clean(text) {
   return String(text || "")
     .replace(/\s+/g, " ")
-    .slice(0, 120);
+    .replace(/"/g, "'")
+    .trim();
 }
 
 builder.defineCatalogHandler(async (args) => {
-
   if (
     args.type !== "series" ||
-    args.id !== "netflix_series_debug3"
+    args.id !== "netflix_series_debug4"
   ) {
     return { metas: [] };
   }
 
   try {
-
     const result = await getPage();
     const html = result.html;
 
-    const scriptRegex =
-      /<script[^>]+type=["']application\/(?:ld\+)?json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    const needle = "application/json";
+    const positions = [];
 
-    const blocks = [];
+    let position = 0;
 
-    let match;
+    while (true) {
+      const found = html
+        .toLowerCase()
+        .indexOf(needle, position);
 
-    while ((match = scriptRegex.exec(html)) !== null) {
-      blocks.push(match[1]);
+      if (found === -1) break;
+
+      positions.push(found);
+      position = found + needle.length;
     }
 
     const metas = [
       {
-        id: "debug3:page",
+        id: "debug4:page",
         type: "series",
-        name: `HTTP ${result.status} | JSON blocks ${blocks.length}`
+        name:
+          `HTTP ${result.status} | HTML ${html.length} | matches ${positions.length}`
       }
     ];
 
-    blocks.forEach((raw, index) => {
+    positions.slice(0, 9).forEach((pos, index) => {
+      const start = Math.max(0, pos - 180);
+      const end = Math.min(
+        html.length,
+        pos + 350
+      );
 
-      let description =
-        `JSON ${index + 1} | length ${raw.length}`;
+      const sample = clean(
+        html.slice(start, end)
+      );
 
-      try {
+      console.log(
+        `===== MATCH ${index + 1} =====`
+      );
+      console.log(sample);
 
-        const parsed = JSON.parse(raw);
-
-        if (Array.isArray(parsed)) {
-          description +=
-            ` | ARRAY ${parsed.length}`;
-
-          if (
-            parsed.length > 0 &&
-            parsed[0] &&
-            typeof parsed[0] === "object"
-          ) {
-            description +=
-              ` | keys: ${Object.keys(parsed[0])
-                .slice(0, 8)
-                .join(",")}`;
-          }
-
-        } else if (
-          parsed &&
-          typeof parsed === "object"
-        ) {
-
-          const keys =
-            Object.keys(parsed).slice(0, 12);
-
-          description +=
-            ` | keys: ${keys.join(",")}`;
-        }
-
-      } catch (error) {
-
-        description +=
-          ` | NOT PARSED | ${safeText(raw)}`;
-      }
-
+      // نخلي جزء من النص يظهر مباشرة في رابط الفحص
       metas.push({
-        id: `debug3:json${index + 1}`,
+        id: `debug4:match${index + 1}`,
         type: "series",
-        name: description
+        name:
+          `MATCH ${index + 1}: ${sample.slice(0, 280)}`
       });
     });
 
-    console.log("===== DEBUG 3 =====");
-    console.log("HTTP:", result.status);
-    console.log("HTML:", html.length);
-    console.log("JSON blocks:", blocks.length);
+    // فحوص إضافية تساعدنا نعرف نوع الصفحة
+    const checks = [
+      ["__NEXT_DATA__", /__NEXT_DATA__/gi],
+      ["netflix.falcor", /falcor/gi],
+      ["graphql", /graphql/gi],
+      ["lolomo", /lolomo/gi],
+      ["genreId", /genreId/gi],
+      ["jawBone", /jawBone/gi],
+      ["billboard", /billboard/gi]
+    ];
 
-    blocks.forEach((raw, i) => {
-      console.log(
-        `JSON ${i + 1}:`,
-        safeText(raw)
-      );
-    });
+    for (const [name, regex] of checks) {
+      const count =
+        (html.match(regex) || []).length;
 
-    console.log("===================");
+      metas.push({
+        id: `debug4:check:${name}`,
+        type: "series",
+        name: `${name} = ${count}`
+      });
+
+      console.log(`${name}: ${count}`);
+    }
+
+    console.log(
+      "Final URL:",
+      result.url
+    );
 
     return { metas };
 
   } catch (error) {
-
-    console.error("DEBUG 3 ERROR:", error);
+    console.error("DEBUG 4 ERROR:", error);
 
     return {
       metas: [
         {
-          id: "debug3:error",
+          id: "debug4:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
