@@ -1,24 +1,25 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.disney.series.posters",
-  version: "3.0.0",
-  name: "🧪 Disney+ Series Posters",
-  description: "اختبار مسلسلات Disney+ مع الصور",
-  resources: ["catalog", "meta"],
+  id: "org.khalid.shahid.series.test",
+  version: "1.0.0",
+  name: "🧪 Shahid Series Test",
+  description: "اختبار كتالوج مسلسلات شاهد",
+  resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "disney_series_posters",
-      name: "Disney+ - مسلسلات"
+      id: "shahid_series_test",
+      name: "شاهد - مسلسلات"
     }
   ]
 };
 
 const builder = new addonBuilder(manifest);
 
-const DISNEY_URL = "https://www.disneyplus.com/";
+// صفحة شاهد العامة
+const SHAHID_URL = "https://shahid.mbc.net/ar/series";
 
 const HEADERS = {
   "User-Agent":
@@ -28,258 +29,149 @@ const HEADERS = {
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 };
 
-function decodeHtml(text) {
+function clean(text) {
   return String(text || "")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/\\u0026/g, "&")
-    .replace(/\\u002F/gi, "/")
-    .replace(/\\\//g, "/")
+    .replace(/\s+/g, " ")
     .trim();
-}
-
-async function getPage(url) {
-  const response = await fetch(url, {
-    headers: HEADERS,
-    redirect: "follow"
-  });
-
-  if (!response.ok) {
-    throw new Error(`Disney HTTP ${response.status}`);
-  }
-
-  return await response.text();
-}
-
-function extractPoster(html) {
-
-  const decoded = decodeHtml(html);
-
-  // نحاول أولاً og:image
-  const ogImage =
-    decoded.match(
-      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
-    )?.[1] ||
-    decoded.match(
-      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i
-    )?.[1];
-
-  if (ogImage) {
-    return decodeHtml(ogImage);
-  }
-
-  // وإذا ما وجدناه نجرب روابط صور Disney
-  const image =
-    decoded.match(
-      /https?:\/\/[^"' <]+\.(?:jpg|jpeg|png|webp)(?:\?[^"' <]*)?/i
-    )?.[0];
-
-  return image ? decodeHtml(image) : "";
-}
-
-function extractDescription(html) {
-
-  const decoded = decodeHtml(html);
-
-  return decodeHtml(
-    decoded.match(
-      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
-    )?.[1] ||
-    decoded.match(
-      /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i
-    )?.[1] ||
-    ""
-  );
-}
-
-function extractItems(html) {
-
-  const items = [];
-  const seen = new Set();
-
-  const regex =
-    /<a[^>]+href=["']([^"']*\/browse\/entity-([a-zA-Z0-9-]+)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-
-  let match;
-
-  while ((match = regex.exec(html)) !== null) {
-
-    const href = decodeHtml(match[1]);
-    const entityId = match[2];
-    const block = match[3];
-
-    if (seen.has(entityId)) continue;
-
-    let name =
-      block.match(/alt=["']([^"']+)["']/i)?.[1] ||
-      block.match(/aria-label=["']([^"']+)["']/i)?.[1] ||
-      "";
-
-    name = decodeHtml(name);
-
-    if (!name) continue;
-
-    if (
-      /disney\+?|logo|hbo max|bundle|espn|hulu/i.test(name)
-    ) {
-      continue;
-    }
-
-    seen.add(entityId);
-
-    let url;
-
-    if (href.startsWith("http")) {
-      url = href;
-    } else {
-      url = `https://www.disneyplus.com${href}`;
-    }
-
-    items.push({
-      entityId,
-      name,
-      url
-    });
-
-    if (items.length >= 10) break;
-  }
-
-  return items;
-}
-
-async function enrichItem(item) {
-
-  try {
-
-    const html = await getPage(item.url);
-
-    const poster = extractPoster(html);
-
-    console.log(
-      "POSTER:",
-      item.name,
-      poster ? "YES" : "NO"
-    );
-
-    const meta = {
-      id: `disney:${item.entityId}`,
-      type: "series",
-      name: item.name
-    };
-
-    if (poster) {
-      meta.poster = poster;
-      meta.background = poster;
-    }
-
-    return meta;
-
-  } catch (error) {
-
-    console.error(
-      "ITEM ERROR:",
-      item.name,
-      error.message
-    );
-
-    return {
-      id: `disney:${item.entityId}`,
-      type: "series",
-      name: item.name
-    };
-  }
 }
 
 builder.defineCatalogHandler(async (args) => {
 
   if (
     args.type !== "series" ||
-    args.id !== "disney_series_posters"
+    args.id !== "shahid_series_test"
   ) {
     return { metas: [] };
   }
 
   try {
 
-    const html = await getPage(DISNEY_URL);
+    const response = await fetch(SHAHID_URL, {
+      headers: HEADERS,
+      redirect: "follow"
+    });
 
-    const items = extractItems(html);
+    const html = await response.text();
 
-    console.log("ITEMS:", items.length);
+    console.log("HTTP:", response.status);
+    console.log("FINAL URL:", response.url);
+    console.log("HTML:", html.length);
 
-    const metas = [];
+    const names = [];
+    const seen = new Set();
 
-    // دفعات صغيرة حتى ما نضغط على Disney
-    for (let i = 0; i < items.length; i += 5) {
+    // التجربة الأولى: أسماء الصور
+    const altRegex = /alt=["']([^"']+)["']/gi;
 
-      const batch = items.slice(i, i + 5);
+    let match;
 
-      const results =
-        await Promise.all(
-          batch.map(enrichItem)
-        );
+    while ((match = altRegex.exec(html)) !== null) {
 
-      metas.push(...results);
+      const name = clean(match[1]);
+
+      if (!name) continue;
+
+      // نستبعد الأشياء العامة
+      if (
+        /shahid|شاهد|logo|facebook|instagram|youtube|app store|google play/i.test(name)
+      ) {
+        continue;
+      }
+
+      if (seen.has(name)) continue;
+
+      seen.add(name);
+      names.push(name);
+
+      if (names.length >= 10) break;
     }
 
-    return { metas };
+    console.log("NAMES FOUND:", names.length);
 
-  } catch (error) {
+    if (names.length) {
 
-    console.error("CATALOG ERROR:", error);
+      return {
+        metas: names.map((name, index) => ({
+          id: `shahid:test:${index + 1}`,
+          type: "series",
+          name
+        }))
+      };
+    }
+
+    // إذا ما ظهرت أسماء، يعطينا تشخيص الصفحة
+    const hrefCount =
+      (html.match(/href=/gi) || []).length;
+
+    const imgCount =
+      (html.match(/<img/gi) || []).length;
+
+    const scriptCount =
+      (html.match(/<script/gi) || []).length;
+
+    const nextDataCount =
+      (html.match(/__NEXT_DATA__/gi) || []).length;
+
+    const seriesCount =
+      (html.match(/series/gi) || []).length;
 
     return {
       metas: [
         {
-          id: "disney:error",
+          id: "shahid:status",
+          type: "series",
+          name:
+            `HTTP ${response.status} | HTML ${html.length}`
+        },
+        {
+          id: "shahid:href",
+          type: "series",
+          name:
+            `href = ${hrefCount}`
+        },
+        {
+          id: "shahid:img",
+          type: "series",
+          name:
+            `img = ${imgCount}`
+        },
+        {
+          id: "shahid:script",
+          type: "series",
+          name:
+            `script = ${scriptCount}`
+        },
+        {
+          id: "shahid:next",
+          type: "series",
+          name:
+            `NEXT_DATA = ${nextDataCount}`
+        },
+        {
+          id: "shahid:series",
+          type: "series",
+          name:
+            `series text = ${seriesCount}`
+        }
+      ]
+    };
+
+  } catch (error) {
+
+    console.error("SHAHID ERROR:", error);
+
+    return {
+      metas: [
+        {
+          id: "shahid:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
       ]
     };
-  }
-});
-
-builder.defineMetaHandler(async (args) => {
-
-  try {
-
-    const entityId =
-      String(args.id || "")
-        .replace("disney:", "");
-
-    if (!entityId) {
-      return { meta: null };
-    }
-
-    const url =
-      `https://www.disneyplus.com/browse/entity-${entityId}`;
-
-    const html = await getPage(url);
-
-    const poster = extractPoster(html);
-    const description = extractDescription(html);
-
-    const meta = {
-      id: `disney:${entityId}`,
-      type: "series",
-      name: "Disney+",
-      description
-    };
-
-    if (poster) {
-      meta.poster = poster;
-      meta.background = poster;
-    }
-
-    return { meta };
-
-  } catch (error) {
-
-    console.error("META ERROR:", error);
-
-    return { meta: null };
   }
 });
 
