@@ -1,44 +1,66 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.netflix.tudum.test",
+  id: "org.khalid.netflix.series83.test",
   version: "1.0.0",
-  name: "🧪 Netflix Tudum Test",
-  description: "اختبار Top 10 Netflix السعودية",
+  name: "🧪 Netflix Series 83",
+  description: "اختبار مسلسلات Netflix من genre 83",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "netflix_tudum_sa",
-      name: "Netflix Top 10 السعودية"
+      id: "netflix_series83",
+      name: "Netflix Series Test"
     }
   ]
 };
 
 const builder = new addonBuilder(manifest);
 
-const URL =
-  "https://www.netflix.com/tudum/top10/saudi-arabia/tv";
+const SERIES_URL =
+  "https://www.netflix.com/sa/browse/genre/83";
 
 const HEADERS = {
+  "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36",
-  "Accept-Language": "en-US,en;q=0.9"
+  "Accept":
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 };
+
+function decodeHtml(text) {
+  return String(text || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\\u0026/g, "&")
+    .replace(/\\u002F/gi, "/")
+    .replace(/\\\//g, "/")
+    .trim();
+}
+
+function cleanName(text) {
+  return decodeHtml(text)
+    .replace(/^Go to\s*/i, "")
+    .replace(/^اذهب إلى\s*/i, "")
+    .trim();
+}
 
 builder.defineCatalogHandler(async (args) => {
 
   if (
     args.type !== "series" ||
-    args.id !== "netflix_tudum_sa"
+    args.id !== "netflix_series83"
   ) {
     return { metas: [] };
   }
 
   try {
 
-    const response = await fetch(URL, {
+    const response = await fetch(SERIES_URL, {
       headers: HEADERS,
       redirect: "follow"
     });
@@ -46,70 +68,76 @@ builder.defineCatalogHandler(async (args) => {
     const html = await response.text();
 
     console.log("HTTP:", response.status);
+    console.log("Final URL:", response.url);
     console.log("HTML:", html.length);
 
-    const names = [];
+    const metas = [];
     const seen = new Set();
 
-    // Tudum يستخدم أسماء الأعمال داخل alt للصور
-    const regex = /alt=["']([^"']+)["']/gi;
+    const regex =
+      /<a[^>]+href=["'][^"']*\/title\/(\d+)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
 
     let match;
 
     while ((match = regex.exec(html)) !== null) {
 
-      let name = match[1]
-        .replace(/^Image:\s*/i, "")
-        .trim();
+      const netflixId = match[1];
+
+      if (seen.has(netflixId)) continue;
+
+      const block = match[2];
+
+      const alt =
+        block.match(/alt=["']([^"']+)["']/i)?.[1] || "";
+
+      const aria =
+        block.match(/aria-label=["']([^"']+)["']/i)?.[1] || "";
+
+      const name = cleanName(alt || aria);
 
       if (!name) continue;
 
-      // نستبعد العناصر العامة
-      if (
-        /netflix|logo|top 10|country|language|profile/i.test(name)
-      ) {
-        continue;
-      }
+      seen.add(netflixId);
 
-      if (seen.has(name)) continue;
+      metas.push({
+        id: `netflix:${netflixId}`,
+        type: "series",
+        name
+      });
 
-      seen.add(name);
-      names.push(name);
-
-      if (names.length >= 10) break;
+      if (metas.length >= 10) break;
     }
 
-    console.log("FOUND:", names);
+    console.log("SERIES FOUND:", metas.length);
 
-    if (!names.length) {
+    // إذا لم نجد شيئًا، تظهر نتيجة التشخيص بدل صفحة فارغة
+    if (!metas.length) {
+
+      const titleLinks =
+        (html.match(/\/title\/\d+/gi) || []).length;
+
       return {
         metas: [
           {
-            id: "tudum:none",
+            id: "series83:debug",
             type: "series",
             name:
-              `لم نجد أسماء | HTTP ${response.status} | HTML ${html.length}`
+              `HTTP ${response.status} | HTML ${html.length} | /title/ = ${titleLinks}`
           }
         ]
       };
     }
 
-    return {
-      metas: names.map((name, index) => ({
-        id: `tudum:${index + 1}`,
-        type: "series",
-        name: `${index + 1}. ${name}`
-      }))
-    };
+    return { metas };
 
   } catch (error) {
 
-    console.error("TUDUM ERROR:", error);
+    console.error("SERIES 83 ERROR:", error);
 
     return {
       metas: [
         {
-          id: "tudum:error",
+          id: "series83:error",
           type: "series",
           name: `ERROR: ${error.message}`
         }
