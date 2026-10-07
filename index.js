@@ -1,16 +1,16 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.shahid.series.test",
-  version: "1.0.0",
-  name: "🧪 Shahid Series Test",
-  description: "اختبار كتالوج مسلسلات شاهد",
+  id: "org.khalid.shahid.series.links",
+  version: "2.0.0",
+  name: "🧪 Shahid Series Links",
+  description: "اختبار روابط ومعرفات مسلسلات شاهد",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "shahid_series_test",
+      id: "shahid_series_links",
       name: "شاهد - مسلسلات"
     }
   ]
@@ -18,7 +18,6 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// صفحة شاهد العامة
 const SHAHID_URL = "https://shahid.mbc.net/ar/series";
 
 const HEADERS = {
@@ -42,7 +41,7 @@ builder.defineCatalogHandler(async (args) => {
 
   if (
     args.type !== "series" ||
-    args.id !== "shahid_series_test"
+    args.id !== "shahid_series_links"
   ) {
     return { metas: [] };
   }
@@ -60,101 +59,104 @@ builder.defineCatalogHandler(async (args) => {
     console.log("FINAL URL:", response.url);
     console.log("HTML:", html.length);
 
-    const names = [];
+    const metas = [];
     const seen = new Set();
 
-    // التجربة الأولى: أسماء الصور
-    const altRegex = /alt=["']([^"']+)["']/gi;
+    const linkRegex =
+      /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
 
     let match;
 
-    while ((match = altRegex.exec(html)) !== null) {
+    while ((match = linkRegex.exec(html)) !== null) {
 
-      const name = clean(match[1]);
+      const href = clean(match[1]);
+      const block = match[2];
+
+      // نريد روابط المسلسلات فقط
+      if (!/series/i.test(href)) continue;
+
+      if (seen.has(href)) continue;
+
+      let name =
+        block.match(/alt=["']([^"']+)["']/i)?.[1] ||
+        block.match(/aria-label=["']([^"']+)["']/i)?.[1] ||
+        block.match(/title=["']([^"']+)["']/i)?.[1] ||
+        "";
+
+      name = clean(name);
+
+      // إذا الاسم غير موجود نحاول استخراجه من نص الرابط
+      if (!name) {
+        name = clean(
+          block.replace(/<[^>]+>/g, " ")
+        );
+      }
 
       if (!name) continue;
 
-      // نستبعد الأشياء العامة
       if (
-        /shahid|شاهد|logo|facebook|instagram|youtube|app store|google play/i.test(name)
+        /kids-menu|plus icon|logo|facebook|instagram|youtube/i.test(name)
       ) {
         continue;
       }
 
-      if (seen.has(name)) continue;
+      seen.add(href);
 
-      seen.add(name);
-      names.push(name);
+      metas.push({
+        id: `shahid:${metas.length + 1}`,
+        type: "series",
+        name
+      });
 
-      if (names.length >= 10) break;
+      console.log("FOUND:", name, href);
+
+      if (metas.length >= 10) break;
     }
 
-    console.log("NAMES FOUND:", names.length);
+    console.log("SERIES LINKS FOUND:", metas.length);
 
-    if (names.length) {
-
-      return {
-        metas: names.map((name, index) => ({
-          id: `shahid:test:${index + 1}`,
-          type: "series",
-          name
-        }))
-      };
+    if (metas.length) {
+      return { metas };
     }
 
-    // إذا ما ظهرت أسماء، يعطينا تشخيص الصفحة
-    const hrefCount =
-      (html.match(/href=/gi) || []).length;
+    // تشخيص إذا لم نجد روابط بالطريقة المتوقعة
+    const allHrefs =
+      [...html.matchAll(/href=["']([^"']+)["']/gi)]
+        .map(x => x[1]);
 
-    const imgCount =
-      (html.match(/<img/gi) || []).length;
+    const seriesHrefs =
+      allHrefs.filter(x => /series/i.test(x));
 
-    const scriptCount =
-      (html.match(/<script/gi) || []).length;
-
-    const nextDataCount =
-      (html.match(/__NEXT_DATA__/gi) || []).length;
-
-    const seriesCount =
-      (html.match(/series/gi) || []).length;
+    const uniqueSeries =
+      [...new Set(seriesHrefs)];
 
     return {
       metas: [
         {
-          id: "shahid:status",
+          id: "shahid:debug:1",
           type: "series",
           name:
             `HTTP ${response.status} | HTML ${html.length}`
         },
         {
-          id: "shahid:href",
+          id: "shahid:debug:2",
           type: "series",
           name:
-            `href = ${hrefCount}`
+            `All links = ${allHrefs.length}`
         },
         {
-          id: "shahid:img",
+          id: "shahid:debug:3",
           type: "series",
           name:
-            `img = ${imgCount}`
+            `Series links = ${uniqueSeries.length}`
         },
         {
-          id: "shahid:script",
+          id: "shahid:debug:4",
           type: "series",
           name:
-            `script = ${scriptCount}`
-        },
-        {
-          id: "shahid:next",
-          type: "series",
-          name:
-            `NEXT_DATA = ${nextDataCount}`
-        },
-        {
-          id: "shahid:series",
-          type: "series",
-          name:
-            `series text = ${seriesCount}`
+            uniqueSeries.length
+              ? `FIRST: ${clean(uniqueSeries[0]).slice(0, 250)}`
+              : "لم نجد روابط series"
         }
       ]
     };
