@@ -1,346 +1,180 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.crunchyroll.anime.test",
+  id: "org.khalid.justwatch.netflix.sa.test",
   version: "1.0.0",
-  name: "🧪 Crunchyroll Anime",
-  description: "اختبار مكتبة Crunchyroll العامة",
-  resources: ["catalog", "meta"],
+  name: "🧪 Netflix Saudi via JustWatch",
+  description: "اختبار كتالوج Netflix السعودية عبر JustWatch",
+  resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "crunchyroll_anime",
-      name: "Crunchyroll"
+      id: "netflix_sa_justwatch",
+      name: "Netflix السعودية - اختبار"
     }
   ]
 };
 
 const builder = new addonBuilder(manifest);
 
-const BASE = "https://www.crunchyroll.com";
-const CATALOG_URL = `${BASE}/ar/videos/new`;
+const JUSTWATCH_URL = "https://apis.justwatch.com/graphql";
 
-const HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36",
-  "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
-  "Accept":
-    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-};
-
-const CACHE_TIME = 6 * 60 * 60 * 1000;
-
-let cache = {
-  time: 0,
-  metas: []
-};
-
-function clean(value) {
-  return String(value || "")
-    .replace(/\\u002F/gi, "/")
-    .replace(/\\\//g, "/")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function absoluteUrl(url) {
-  url = clean(url);
-
-  if (!url) return null;
-
-  if (url.startsWith("//")) {
-    return `https:${url}`;
-  }
-
-  if (url.startsWith("/")) {
-    return `${BASE}${url}`;
-  }
-
-  if (/^https?:\/\//i.test(url)) {
-    return url;
-  }
-
-  return null;
-}
-
-function extractSeries(html) {
-
-  html = clean(html);
-
-  const results = [];
-  const seen = new Set();
-
-  /*
-    Crunchyroll:
-    /ar/series/GDKHZEJ0K/solo-leveling
-  */
-
-  const regex =
-    /\/(?:[a-z]{2}\/)?series\/([A-Z0-9]+)\/([^"'<>?#\s]+)/gi;
-
-  let match;
-
-  while ((match = regex.exec(html)) !== null) {
-
-    const id = match[1];
-    const slug = match[2];
-
-    if (!id || seen.has(id)) continue;
-
-    seen.add(id);
-
-    let name;
-
-    try {
-      name = decodeURIComponent(slug)
-        .replace(/-/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-    } catch {
-      name = slug.replace(/-/g, " ");
+const QUERY = `
+query GetPopularTitles(
+  $country: Country!
+  $language: Language!
+  $first: Int!
+  $filter: TitleFilter
+) {
+  popularTitles(
+    country: $country
+    first: $first
+    filter: $filter
+  ) {
+    edges {
+      node {
+        id
+        objectId
+        objectType
+        content(country: $country, language: $language) {
+          title
+          originalReleaseYear
+          fullPath
+        }
+        scoring {
+          imdbId
+        }
+      }
     }
-
-    results.push({
-      id,
-      name,
-      url: `${BASE}/ar/series/${id}/${slug}`
-    });
-
-    if (results.length >= 10) break;
   }
-
-  return results;
 }
+`;
 
-function extractMeta(html, fallbackName, id) {
+async function getNetflixSaudiSeries() {
 
-  const title =
-    html.match(
-      /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i
-    )?.[1] ||
-    html.match(
-      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i
-    )?.[1] ||
-    fallbackName;
+  const response = await fetch(JUSTWATCH_URL, {
+    method: "POST",
 
-  const description =
-    html.match(
-      /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i
-    )?.[1] ||
-    html.match(
-      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
-    )?.[1] ||
-    html.match(
-      /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i
-    )?.[1] ||
-    "";
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"
+    },
 
-  let image =
-    html.match(
-      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
-    )?.[1] ||
-    html.match(
-      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i
-    )?.[1] ||
-    "";
+    body: JSON.stringify({
+      operationName: "GetPopularTitles",
 
-  image = absoluteUrl(image);
+      variables: {
+        country: "SA",
+        language: "ar",
+        first: 10,
 
-  return {
-    id: `crunchyroll:${id}`,
-    type: "series",
-    name: clean(title)
-      .replace(/\s*-\s*Crunchyroll.*$/i, "")
-      .trim(),
-    description: clean(description),
-    poster: image || undefined,
-    background: image || undefined,
-    posterShape: "poster"
-  };
-}
+        filter: {
+          objectTypes: ["SHOW"],
+          packages: ["nfx"]
+        }
+      },
 
-async function fetchPage(url) {
-
-  const response = await fetch(url, {
-    headers: HEADERS,
-    redirect: "follow"
+      query: QUERY
+    })
   });
 
+  const text = await response.text();
+
+  console.log("JUSTWATCH HTTP:", response.status);
+  console.log("JUSTWATCH RESPONSE:", text.slice(0, 1000));
+
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  return await response.text();
-}
-
-async function getCatalog() {
-
-  if (
-    cache.metas.length &&
-    Date.now() - cache.time < CACHE_TIME
-  ) {
-    return cache.metas;
-  }
-
-  const html = await fetchPage(CATALOG_URL);
-
-  const items = extractSeries(html);
-
-  console.log(
-    "Crunchyroll series found:",
-    items.length
-  );
-
-  const metas = [];
-
-  /*
-    دفعات صغيرة حتى ما نضغط الموقع
-  */
-
-  for (let i = 0; i < items.length; i += 5) {
-
-    const batch = items.slice(i, i + 5);
-
-    const data = await Promise.all(
-      batch.map(async item => {
-
-        try {
-
-          const page = await fetchPage(item.url);
-
-          return extractMeta(
-            page,
-            item.name,
-            item.id
-          );
-
-        } catch (error) {
-
-          console.error(
-            "META ERROR:",
-            item.id,
-            error.message
-          );
-
-          return {
-            id: `crunchyroll:${item.id}`,
-            type: "series",
-            name: item.name
-          };
-        }
-      })
+    throw new Error(
+      `JustWatch HTTP ${response.status}: ${text.slice(0, 200)}`
     );
-
-    metas.push(...data);
   }
 
-  cache = {
-    time: Date.now(),
-    metas
-  };
+  const data = JSON.parse(text);
 
-  return metas;
+  if (data.errors) {
+    throw new Error(
+      data.errors.map(x => x.message).join(" | ")
+    );
+  }
+
+  const edges =
+    data?.data?.popularTitles?.edges || [];
+
+  return edges.slice(0, 10);
 }
 
-
-// ======================
-// CATALOG
-// ======================
 
 builder.defineCatalogHandler(async args => {
 
   if (
     args.type !== "series" ||
-    args.id !== "crunchyroll_anime"
+    args.id !== "netflix_sa_justwatch"
   ) {
     return { metas: [] };
   }
 
   try {
 
-    const metas = await getCatalog();
+    const edges =
+      await getNetflixSaudiSeries();
 
-    return { metas };
+    if (!edges.length) {
+      return {
+        metas: [
+          {
+            id: "jw:none",
+            type: "series",
+            name: "لم نجد مسلسلات Netflix للسعودية"
+          }
+        ]
+      };
+    }
+
+    return {
+      metas: edges.map((edge, index) => {
+
+        const item = edge.node;
+        const content = item.content || {};
+
+        const name =
+          content.title ||
+          `Netflix ${index + 1}`;
+
+        const year =
+          content.originalReleaseYear
+            ? ` (${content.originalReleaseYear})`
+            : "";
+
+        return {
+          id:
+            edge.node.scoring?.imdbId ||
+            `jw:${item.objectId || item.id}`,
+
+          type: "series",
+
+          name:
+            `${index + 1}. ${name}${year}`
+        };
+      })
+    };
 
   } catch (error) {
 
-    console.error(
-      "CRUNCHYROLL CATALOG ERROR:",
-      error
-    );
+    console.error("JUSTWATCH ERROR:", error);
 
     return {
       metas: [
         {
-          id: "crunchyroll:error",
+          id: "jw:error",
           type: "series",
-          name: `Crunchyroll ERROR: ${error.message}`
+          name:
+            `JustWatch ERROR: ${error.message}`.slice(0, 450)
         }
       ]
     };
-  }
-});
-
-
-// ======================
-// META
-// ======================
-
-builder.defineMetaHandler(async args => {
-
-  if (
-    args.type !== "series" ||
-    !args.id.startsWith("crunchyroll:")
-  ) {
-    return { meta: null };
-  }
-
-  try {
-
-    const crunchyId =
-      args.id.replace("crunchyroll:", "");
-
-    /*
-      أولاً نحاول نجيبه من الكاش
-    */
-
-    const catalog = await getCatalog();
-
-    const cached = catalog.find(
-      item => item.id === args.id
-    );
-
-    if (cached) {
-      return { meta: cached };
-    }
-
-    /*
-      إذا العمل مو موجود ضمن أول 10،
-      نرجع بيانات أساسية.
-    */
-
-    return {
-      meta: {
-        id: args.id,
-        type: "series",
-        name: `Crunchyroll ${crunchyId}`
-      }
-    };
-
-  } catch (error) {
-
-    console.error(
-      "CRUNCHYROLL META ERROR:",
-      error
-    );
-
-    return { meta: null };
   }
 });
 
