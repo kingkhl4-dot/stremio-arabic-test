@@ -1,16 +1,16 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.disney.series.test",
-  version: "1.0.0",
-  name: "🧪 Disney+ Series Test",
-  description: "اختبار كتالوج مسلسلات Disney+",
+  id: "org.khalid.disney.series.links",
+  version: "2.0.0",
+  name: "🧪 Disney+ Series Links",
+  description: "اختبار روابط ومعرفات أعمال Disney+",
   resources: ["catalog"],
   types: ["series"],
   catalogs: [
     {
       type: "series",
-      id: "disney_series_test",
+      id: "disney_series_links",
       name: "Disney+ - مسلسلات"
     }
   ]
@@ -18,7 +18,6 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// صفحة Disney+ العامة
 const DISNEY_URL = "https://www.disneyplus.com/";
 
 const HEADERS = {
@@ -42,7 +41,7 @@ builder.defineCatalogHandler(async (args) => {
 
   if (
     args.type !== "series" ||
-    args.id !== "disney_series_test"
+    args.id !== "disney_series_links"
   ) {
     return { metas: [] };
   }
@@ -57,96 +56,95 @@ builder.defineCatalogHandler(async (args) => {
     const html = await response.text();
 
     console.log("HTTP:", response.status);
-    console.log("FINAL URL:", response.url);
     console.log("HTML:", html.length);
 
-    const names = [];
+    const metas = [];
     const seen = new Set();
 
-    // نجرب أولاً أسماء الصور الموجودة في الصفحة العامة
-    const altRegex = /alt=["']([^"']+)["']/gi;
+    /*
+      نبحث عن رابط Disney entity
+      ونفحص المحتوى القريب منه للحصول على اسم الصورة
+    */
+    const linkRegex =
+      /<a[^>]+href=["']([^"']*\/browse\/entity-([a-zA-Z0-9-]+)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
 
     let match;
 
-    while ((match = altRegex.exec(html)) !== null) {
+    while ((match = linkRegex.exec(html)) !== null) {
 
-      const name = clean(match[1]);
+      const href = clean(match[1]);
+      const entityId = clean(match[2]);
+      const block = match[3];
+
+      if (!entityId || seen.has(entityId)) continue;
+
+      let name =
+        block.match(/alt=["']([^"']+)["']/i)?.[1] ||
+        block.match(/aria-label=["']([^"']+)["']/i)?.[1] ||
+        "";
+
+      name = clean(name);
 
       if (!name) continue;
 
-      // نستبعد العناصر العامة والشعارات
       if (
-        /disney|logo|facebook|instagram|youtube|app store|google play/i.test(name)
+        /disney\+?|logo|hbo max|bundle|espn|hulu/i.test(name)
       ) {
         continue;
       }
 
-      if (seen.has(name)) continue;
+      seen.add(entityId);
 
-      seen.add(name);
-      names.push(name);
+      metas.push({
+        id: `disney:${entityId}`,
+        type: "series",
+        name: name
+      });
 
-      if (names.length >= 10) break;
+      console.log(
+        "FOUND:",
+        name,
+        entityId,
+        href
+      );
+
+      if (metas.length >= 10) break;
     }
 
-    console.log("NAMES FOUND:", names.length);
+    console.log("ENTITY RESULTS:", metas.length);
 
-    // إذا وجدنا أسماء، نعرض أول 10
-    if (names.length) {
-
-      return {
-        metas: names.map((name, index) => ({
-          id: `disney:test:${index + 1}`,
-          type: "series",
-          name
-        }))
-      };
+    if (metas.length) {
+      return { metas };
     }
 
-    // إذا لم نجد، نعرض تشخيص الصفحة
-    const hrefCount =
-      (html.match(/href=/gi) || []).length;
+    // إذا ما اشتغل الربط، نعرف هل روابط entity موجودة أصلًا
+    const entityLinks =
+      html.match(/\/browse\/entity-[a-zA-Z0-9-]+/gi) || [];
 
-    const imageCount =
-      (html.match(/<img/gi) || []).length;
-
-    const scriptCount =
-      (html.match(/<script/gi) || []).length;
-
-    const nextData =
-      (html.match(/__NEXT_DATA__/gi) || []).length;
+    const uniqueEntities =
+      [...new Set(entityLinks)];
 
     return {
       metas: [
         {
-          id: "disney:status",
+          id: "disney:debug:1",
           type: "series",
           name:
             `HTTP ${response.status} | HTML ${html.length}`
         },
         {
-          id: "disney:href",
+          id: "disney:debug:2",
           type: "series",
           name:
-            `href = ${hrefCount}`
+            `Entity links = ${uniqueEntities.length}`
         },
         {
-          id: "disney:images",
+          id: "disney:debug:3",
           type: "series",
           name:
-            `img = ${imageCount}`
-        },
-        {
-          id: "disney:scripts",
-          type: "series",
-          name:
-            `script = ${scriptCount}`
-        },
-        {
-          id: "disney:next",
-          type: "series",
-          name:
-            `NEXT_DATA = ${nextData}`
+            uniqueEntities.length
+              ? `FIRST: ${uniqueEntities[0]}`
+              : "لم نجد روابط entity"
         }
       ]
     };
