@@ -1,8 +1,8 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 
 const manifest = {
-  id: "org.khalid.justwatch.netflix.sa.test",
-  version: "1.0.0",
+  id: "org.khalid.justwatch.netflix.sa.test2",
+  version: "2.0.0",
   name: "🧪 Netflix Saudi via JustWatch",
   description: "اختبار كتالوج Netflix السعودية عبر JustWatch",
   resources: ["catalog"],
@@ -10,8 +10,8 @@ const manifest = {
   catalogs: [
     {
       type: "series",
-      id: "netflix_sa_justwatch",
-      name: "Netflix السعودية - اختبار"
+      id: "netflix_sa_justwatch2",
+      name: "Netflix السعودية - JustWatch"
     }
   ]
 };
@@ -37,13 +37,14 @@ query GetPopularTitles(
         id
         objectId
         objectType
-        content(country: $country, language: $language) {
+
+        content(
+          country: $country
+          language: $language
+        ) {
           title
           originalReleaseYear
           fullPath
-        }
-        scoring {
-          imdbId
         }
       }
     }
@@ -83,27 +84,24 @@ async function getNetflixSaudiSeries() {
 
   const text = await response.text();
 
-  console.log("JUSTWATCH HTTP:", response.status);
-  console.log("JUSTWATCH RESPONSE:", text.slice(0, 1000));
+  console.log("HTTP:", response.status);
+  console.log("RESPONSE:", text.slice(0, 2000));
 
   if (!response.ok) {
     throw new Error(
-      `JustWatch HTTP ${response.status}: ${text.slice(0, 200)}`
+      `HTTP ${response.status}: ${text.slice(0, 300)}`
     );
   }
 
   const data = JSON.parse(text);
 
-  if (data.errors) {
+  if (data.errors?.length) {
     throw new Error(
-      data.errors.map(x => x.message).join(" | ")
+      data.errors.map(e => e.message).join(" | ")
     );
   }
 
-  const edges =
-    data?.data?.popularTitles?.edges || [];
-
-  return edges.slice(0, 10);
+  return data?.data?.popularTitles?.edges || [];
 }
 
 
@@ -111,15 +109,14 @@ builder.defineCatalogHandler(async args => {
 
   if (
     args.type !== "series" ||
-    args.id !== "netflix_sa_justwatch"
+    args.id !== "netflix_sa_justwatch2"
   ) {
     return { metas: [] };
   }
 
   try {
 
-    const edges =
-      await getNetflixSaudiSeries();
+    const edges = await getNetflixSaudiSeries();
 
     if (!edges.length) {
       return {
@@ -127,21 +124,21 @@ builder.defineCatalogHandler(async args => {
           {
             id: "jw:none",
             type: "series",
-            name: "لم نجد مسلسلات Netflix للسعودية"
+            name: "JustWatch رجع 0 مسلسل"
           }
         ]
       };
     }
 
     return {
-      metas: edges.map((edge, index) => {
+      metas: edges.slice(0, 10).map((edge, index) => {
 
-        const item = edge.node;
-        const content = item.content || {};
+        const node = edge.node;
+        const content = node.content || {};
 
-        const name =
+        const title =
           content.title ||
-          `Netflix ${index + 1}`;
+          `مسلسل ${index + 1}`;
 
         const year =
           content.originalReleaseYear
@@ -149,14 +146,9 @@ builder.defineCatalogHandler(async args => {
             : "";
 
         return {
-          id:
-            edge.node.scoring?.imdbId ||
-            `jw:${item.objectId || item.id}`,
-
+          id: `jw:${node.objectId || node.id}`,
           type: "series",
-
-          name:
-            `${index + 1}. ${name}${year}`
+          name: `${index + 1}. ${title}${year}`
         };
       })
     };
@@ -171,7 +163,7 @@ builder.defineCatalogHandler(async args => {
           id: "jw:error",
           type: "series",
           name:
-            `JustWatch ERROR: ${error.message}`.slice(0, 450)
+            `JustWatch ERROR: ${error.message}`.slice(0, 500)
         }
       ]
     };
